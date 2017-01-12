@@ -20,7 +20,6 @@ r_overshoot   = 20          # distance by which probes overshoot centre (mm)
 r_head        = 10.8 #10          # radius of probe head
 r_min         = r_patrol    # minimum extension of probes (mm)
 r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
-theta_max_deg = 51.72/2     # max angular offset rotator home position (deg)
 r0            = r_max-r_patrol # initial probe extension (mm)
 maxstars      = 3     # maximum number of stars
 
@@ -61,12 +60,11 @@ tol_sq        = tol**2
 tol_comp      = tol/2 # tangential/radial component of tolerance
 tol_col_sq    = tol_col**2
 tol_avoid_sq  = tol_avoid**2
-theta_max     = np.radians(theta_max_deg)  # max rotator offset in radians
-
+theta_max = np.arcsin(r_patrol/(r_max-r_overshoot)) # max rotator offset
+theta_max_deg = np.degrees(theta_max)
 grad_tol      = 0.1*0.5*beta*vmax*dt # target potential gradient 1/2 step away
-                                 # from the minimum
-
-
+                                     # from the minimum
+                                 
 d_clear       = 2.*r_origin*np.cos(np.radians(30)) # total probe lengths clear
 
 #print "Arrival tolerance (mm):",tol
@@ -74,8 +72,8 @@ d_clear       = 2.*r_origin*np.cos(np.radians(30)) # total probe lengths clear
 # max value of collision potential
 u_col_max     = 0.5*alpha*(1/col_min - 1/tol_avoid)**alpha
 
-# sequence of canned asterisms for testing
-canned_easy = [
+# sequence of predefined asterisms for testing
+aster_easy = [
     [  (-113,  19), ( -22,  44), (22,22) ],
     [  ( -22,  44), (-113,  19), (22,22) ],
     [  ( 127,  25), (  39, -80), (0,0) ],
@@ -96,7 +94,7 @@ canned_easy = [
 ]
 
 
-canned_seq = [
+aster_seq = [
     #[  (-113,  19), ( -22,  44), (22,22) ],
     #[  ( -22,  44), (-113,  19), (22,22) ],
     [ (15, 5),  (10, -40), (-10, -5) ],
@@ -117,7 +115,7 @@ canned_seq = [
     [ (10, 5),(-20,-75), (10, -65) ]
 ]
 
-canned_hard = [
+aster_hard = [
 #    [  (0,0), (-50, 55), (22,22) ],
 #    [ (10, 5),  (10, -30), (-10, -5) ],
     [ (10, 5),(10, -65), (-20,-35) ],
@@ -127,19 +125,19 @@ canned_hard = [
     [ (10, 5),(-20,-75), (10, -65) ]
 ]
 
-canned_test = [
+aster_test = [
     [ (-60.4716091079,40.6646902121), (-78.5700361149,-85.1306245579), (14.189597544,-9.54389074502) ],
     [ (125.421330453,21.0028940272), (-43.2227332253,59.4616554138), (96.6688013784,-5.84546652608) ]
 ]
 
-canned_move = [
+aster_move = [
     [ ( -20,  -5), (   0,-125), ( -20, -100) ],
     [ (  25,  -5), (   0,-125), ( -30, -125) ],
 ]
 
-#canned = canned_easy
-#canned = canned_hard
-#canned = canned_test
+#aster = aster_easy
+#aster = aster_hard
+#aster = aster_test
 
 
 
@@ -621,12 +619,12 @@ class State(object):
                  head_lw=2,
                  probe_width=2,
                  title_str=None,
-                 canned=None,
-                 canned_select=True,
+                 aster=None,
+                 aster_select=True,
                  use_tran=True,
                  use_vel_servo=False,
                  tran_scale=3,
-                 canned_start=0,
+                 aster_start=0,
                  probe_cols=['b','b','b'],
                  display=True,
                  dwell=200,
@@ -662,11 +660,11 @@ class State(object):
         self.plot_init()
         self.asterism_counter=0
 
-        self.i_canned = canned_start  # canned asterism counter
-        self.i_vcanned = [canned_start,canned_start,canned_start]
+        self.i_aster = aster_start  # predefined asterism counter
+        self.i_vaster = [aster_start,aster_start,aster_start]
 
-        self.canned=canned
-        self.canned_select=canned_select
+        self.aster=aster
+        self.aster_select=aster_select
 
         self.use_tran=use_tran
         self.use_vel_servo=False
@@ -762,16 +760,16 @@ class State(object):
     def random_stars(self):
         """ Generate new random star positions """
 
-        if self.canned:
-            #print 'canned: ',self.i_canned
+        if self.aster:
+            #print 'aster: ',self.i_aster
 
             for i in range(len(self.stars)):
                 star = self.stars[i]
-                star.x, star.y = self.canned[self.i_canned][i]
+                star.x, star.y = self.aster[self.i_aster][i]
 
-            self.i_canned = (self.i_canned+1) % len(self.canned)
-            #if self.i_canned > (len(canned)-1):
-            #    self.i_canned = len(canned)-1
+            self.i_aster = (self.i_aster+1) % len(self.aster)
+            #if self.i_aster > (len(aster)-1):
+            #    self.i_aster = len(aster)-1
 
         else:
 
@@ -802,8 +800,8 @@ class State(object):
 
     def select_probes(self):
 
-        # Using canned asterisms / configurations
-        if self.canned and self.canned_select:
+        # Using predefined asterisms / configurations
+        if self.aster and self.aster_select:
             for i in range(len(self.stars)):
                 p = self.probes[i]
                 s = self.stars[i]
@@ -907,8 +905,8 @@ class State(object):
         # contributions to figure out the direction of the next step
         probe_gradients = [ {'grad_targ': np.array([0,0]),
                              'grad_col' : np.array([0,0]),
-                             'grad_tran' : np.array([0,0])} \
-                            for i in range(3)]
+                             'grad_tran': np.array([0,0])} \
+                            for i in range(3) ]
 
         # First do the repulsion - all unique combinations of probes.
         for i,j in itertools.combinations(range(3),2):
@@ -1055,7 +1053,6 @@ class State(object):
                     #print 'Overshot! (%f,%f) > (%f,%f)' % \
                     #    (p.vr, p.vt, vr_tol, vt_tol)
 
-
             if dist_sq < (2*tol)**2:
                 # Additional hack: if we're close enough to the
                 # target, ignore the repulsive components and head
@@ -1072,9 +1069,10 @@ class State(object):
 
             grad = p.grad_pol(grad_cart)
             norm = np.linalg.norm(grad)
-            #if i == 2:
-            #    print 'Total polar gradients',i,':',grad, norm, [p.x, p.y]
-            #    time.sleep(0.1)
+            #if i == 0:
+            #    print 'Total polar gradients',i,':',grad, norm, [p.x, p.y], \
+            #        [p.r,p.theta]
+            #time.sleep(0.1)
                 #print norm
             if norm > 0 :
 
@@ -1127,6 +1125,7 @@ class State(object):
                 dir = grad/norm
 
                 max_vr,max_vt = max_vel(dir)
+                    
                 if self.use_vel_servo:
                     #info = p is self.probes[1]
                     info = False
@@ -1208,7 +1207,7 @@ class State(object):
                     p.star = s
 
                     if s.x is None or s.y is None:
-                        s.x,s.y = self.canned[0][j]
+                        s.x,s.y = self.aster[0][j]
 
                     xnew = s.x + self.star_vel[0]*dt
                     ynew = s.y + self.star_vel[1]*dt
@@ -1222,9 +1221,9 @@ class State(object):
                         s.y = ynew
                     else:
                         # Otherwise switch to next star
-                        self.i_vcanned[j] = (self.i_vcanned[j]+1) % \
-                                            len(self.canned)
-                        s.x,s.y = self.canned[self.i_vcanned[j]][j]
+                        self.i_vaster[j] = (self.i_vaster[j]+1) % \
+                                            len(self.aster)
+                        s.x,s.y = self.aster[self.i_vaster[j]][j]
                         p.trail_x = []
                         p.trail_y = []
 
@@ -1493,9 +1492,9 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             vectors=None,               # list of ['att','rep','tran']
             i_ref=None,                 # reference probe index (0,1,2)
             startpos=None,              # start positions for probes
-            canned=None,                # sequence of canned asterisms
-            canned_select=False,        # used canned star selection?
-            canned_start=0,             # Start index in canned
+            aster=None,                 # sequence of predefined asterisms
+            aster_select=False,         # use predefined star selection?
+            aster_start=0,              # Start index in aster
             use_tran=True,              # use transverse component?
             tran_scale=3,               # strength of transverse component
             figsize=(5.5,5),            # figure size
@@ -1542,12 +1541,12 @@ def run_sim(animate='cont',             # one of 'cont','track',None
               probe_width=probe_width,
               head_fill=head_fill,
               head_lw=head_lw,
-              canned=canned,
-              canned_select=canned_select,
+              aster=aster,
+              aster_select=aster_select,
               use_tran=use_tran,
               use_vel_servo=use_vel_servo,
               tran_scale=tran_scale,
-              canned_start=canned_start,
+              aster_start=aster_start,
               probe_cols=probe_cols,
               display=display,
               dwell=dwell,
@@ -1591,13 +1590,13 @@ def run_sim(animate='cont',             # one of 'cont','track',None
 
         for i in range(3):
             # Setup initial positions
-            star = canned[s.i_canned][i]
+            star = aster[s.i_aster][i]
             p = s.probes[i]
             p.set_cart(star[0],star[1])
             p.update_graphics()
 
         # Move will be to next asterism in list
-        s.i_canned = (s.i_canned+1) % len(canned)
+        s.i_aster = (s.i_aster+1) % len(aster)
 
         i=0
         while True:
@@ -1612,11 +1611,11 @@ def run_sim(animate='cont',             # one of 'cont','track',None
         for j in range(3):
             p = s.probes[j]
             p.star = s.stars[j]
-            star1 = canned[s.i_canned][j]    # current position
+            star1 = aster[s.i_aster][j]    # current position
             p.set_cart(star1[0],star1[1])
 
-            n = (s.i_canned+1) % len(canned)
-            star2 = canned[n][j]  # where we're headed
+            n = (s.i_aster+1) % len(aster)
+            star2 = aster[n][j]  # where we're headed
             p.star.x,p.star.y=star2
 
         if startpos is not None:
@@ -1661,21 +1660,22 @@ def run_sim(animate='cont',             # one of 'cont','track',None
 
 if __name__ == '__main__':
 
-    run_sim(animate='cont',display=True,dwell=50,frameskip=1)
+    # animate a sequence of random reconfigurations, show on-screen
+    #run_sim(animate='cont',display=True,dwell=50,frameskip=1)
     
-    # animated with vector field
+    # animated with vector field, write to file
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
     #        plotlim=[-150,150,-150,150],
     #        i_ref=1,vectors=['att','rep','tran'],
-    #        canned=canned_easy,canned_select=True,
+    #        aster=aster_easy,aster_select=True,
     #        fname='reconfigs_vect.mp4',fps=60,frames=2895,dpi=150)
     #sys.exit(1)
 
 
-    # non-sidereal tracking
+    # animated non-sidereal tracking, write to file
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
     #        plotlim=[-150,150,-150,150], star_vel=[0.5,2],
-    #        canned=canned_move,canned_select=True)#,
+    #        aster=aster_move,aster_select=True)#,
     #        fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
     #sys.exit(1)
 
@@ -1683,32 +1683,32 @@ if __name__ == '__main__':
     figtype = 'png'
 
     # overview plot
-    run_sim(animate=None,canned=canned_easy,canned_select=True,
-            canned_start=8,figsize=(5.5,5),dpi=150,fname='model.'+figtype)
+    run_sim(animate=None,aster=aster_easy,aster_select=True,
+            aster_start=8,figsize=(5.5,5),dpi=150,fname='model.'+figtype)
 
     # show contours for normal situation
     plotlim=[-150,150,-150,150]
     contour_steps = 1
     levels = np.logspace(-1.8,0.2,40,endpoint=True)
-    canned = [[ (-65,7), (-35,-15), (70,0) ]]
+    aster = [[ (-65,7), (-35,-15), (70,0) ]]
     startpos={'1':[-100,50]}
-    run_sim(animate=None,canned=canned,canned_select=True,
-            canned_start=0,fname='attract.'+figtype,plotlim=plotlim,
+    run_sim(animate=None,aster=aster,aster_select=True,
+            aster_start=0,fname='attract.'+figtype,plotlim=plotlim,
             i_ref=1, contours=['att'], levels=levels,
             startpos=startpos, contour_steps=contour_steps)
 
-    run_sim(animate=None,canned=canned,canned_select=True,
-            canned_start=0,fname='components.'+figtype,plotlim=plotlim,
+    run_sim(animate=None,aster=aster,aster_select=True,
+            aster_start=0,fname='components.'+figtype,plotlim=plotlim,
             i_ref=1, contours=['att','rep'], levels=levels,
             startpos=startpos, contour_steps=contour_steps)
 
-    run_sim(animate=None,canned=canned,canned_select=True,
-            canned_start=0,fname='total.'+figtype,plotlim=plotlim,
+    run_sim(animate=None,aster=aster,aster_select=True,
+            aster_start=0,fname='total.'+figtype,plotlim=plotlim,
             i_ref=1, contours=['tot'], levels=levels,
             startpos=startpos, contour_steps=contour_steps)
 
     # contours when there is a local minimum
-    canned = [[ (0,50), (10,-65), (-35,-105) ]]
+    aster = [[ (0,50), (10,-65), (-35,-105) ]]
     startpos={'2':[-18,-20]}
     plotlim=[-90,40,-140,10]
     #contour_steps = 1
@@ -1721,8 +1721,8 @@ if __name__ == '__main__':
                                 'fill' : False}})
                 ]
 
-    run_sim(animate=None,canned=canned,canned_select=True,
-            canned_start=0,fname='localmin.'+figtype,
+    run_sim(animate=None,aster=aster,aster_select=True,
+            aster_start=0,fname='localmin.'+figtype,
             i_ref=2, contours=['tot'], levels=levels,
             startpos=startpos, contour_steps=contour_steps,
             plotlim=plotlim,title_str='(a) Scalar Potential',
@@ -1730,22 +1730,22 @@ if __name__ == '__main__':
 
     # vector field plots
     #contour_steps=1
-    run_sim(animate=None,canned=canned,canned_select=True,
-            canned_start=0,fname='vect_basic.'+figtype,
+    run_sim(animate=None,aster=aster,aster_select=True,
+            aster_start=0,fname='vect_basic.'+figtype,
             i_ref=2, vectors=['att','rep'], levels=levels,
             startpos=startpos, contour_steps=contour_steps,
             plotlim=plotlim, title_str='(b) Gradient Field',
             annotations=annotations)
 
-    run_sim(animate=None,canned=canned,canned_select=True,
-            canned_start=0,fname='vect_tran.'+figtype,
+    run_sim(animate=None,aster=aster,aster_select=True,
+            aster_start=0,fname='vect_tran.'+figtype,
             i_ref=2, vectors=['tran'], levels=levels,
             startpos=startpos, contour_steps=contour_steps,
             plotlim=plotlim, title_str='(c) Transverse Component',
             annotations=annotations)
 
-    run_sim(animate=None,canned=canned,canned_select=True,
-            canned_start=0,fname='vect_tot.'+figtype,
+    run_sim(animate=None,aster=aster,aster_select=True,
+            aster_start=0,fname='vect_tot.'+figtype,
             i_ref=2, vectors=['att','rep','tran'], levels=levels,
             startpos=startpos, contour_steps=contour_steps,
             plotlim=plotlim, title_str='(d) Total Vector Field',
@@ -1755,6 +1755,6 @@ if __name__ == '__main__':
     # Show some re-configurations
     plotlim=[-150,150,-150,150]
     for i in range(4):
-        run_sim(animate='track',canned=canned_seq,canned_select=True,
-                canned_start=i,fname='reconfig%i.%s' % (i,figtype),
+        run_sim(animate='track',aster=aster_seq,aster_select=True,
+                aster_start=i,fname='reconfig%i.%s' % (i,figtype),
                 plotlim=plotlim)
