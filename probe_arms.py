@@ -1671,12 +1671,14 @@ def run_sim(animate='cont',             # one of 'cont','track',None
 #   - the stars are provided in the same order as the probes. At a rotator
 #     PA of 0 deg, they are ordered counter-clockwise starting with the
 #     top probe
+#   - if autoselect set, instead assign probes to supplied stars automatically
 #   - if the probe assignment is invalid, an exception will be thrown
 #     by the Probe.set_cart() calls:
 #     o ProbeLimitsException() if it is not within the Probe's patrol range
 #     o ProbeCollision()       if it would collide with another probe
 def oiwfs_sky(pointing,         # [ra,dec,PA] in degrees
-              stars             # [[ra,dec],[ra,dec],[ra,dec] in degrees
+              stars,            # [[ra,dec],[ra,dec],[ra,dec] in degrees
+              autoselect=False  # automatically select stars if True
 ):
 
     # Initialize the OIWFS state
@@ -1691,22 +1693,31 @@ def oiwfs_sky(pointing,         # [ra,dec,PA] in degrees
     w.wcs.cd = np.array([[-np.cos(pa),+np.sin(pa)], # includes RA sign flip
                          [np.sin(pa),np.cos(pa)]]) * \
                          (1./(platescale*3600.)) # deg/mm
-
-    # Convert star coordinates to focal plane coordinates and assign probes
-    # to them
-    stars_fplane = w.wcs_world2pix(stars,1)
         
-    print w
-
-    print "Regions specified in degrees in RA, Dec"
+    # Convert star coordinates to focal plane coordinates and store in State
+    stars_fplane = w.wcs_world2pix(stars,1)
     for i in range(3):
         s.stars[i].x = stars_fplane[i][0]    # set star location
         s.stars[i].y = stars_fplane[i][1]
-        p = s.probes[i]                      # probe reference
-        p.star = s.stars[i]                  # associate star with probe
-        p.set_cart(p.star.x,p.star.y)        # move probe to its star
+    
+    if autoselect:
+        # assign probes to stars automatically
+        s.select_probes()
+    else:
+        # assign stars to probes in order
+        for i in range(3):
+            p = s.probes[i]
+            p.star = s.stars[i]
 
-        # generate lines and circles in sky coordinates
+    # Set probe positions to their assigned star
+    for i in range(3):
+        p = s.probes[i]
+        p.set_cart(p.star.x,p.star.y)
+
+    # print regions as lines and circles
+    print "# OIWFS Regions specified in degrees in RA, Dec"
+    for i in range(3):
+        p = s.probes[i]                      # probe reference
         c_fplane = np.array([[p.x0,p.y0],[p.x,p.y]])
         c = w.wcs_pix2world(c_fplane,1)
 
@@ -1724,7 +1735,8 @@ if __name__ == '__main__':
     oiwfs_sky([180.,1,10],
               np.array([[180. + 0    ,1. + 0.006],
                         [180. + 0.012,1. - 0.006],
-                        [180. - 0.012,1. - 0.006]]))
+                        [180. - 0.012,1. - 0.006]]),
+              autoselect=False)
     sys.exit(1)
 
     # animate a sequence of random reconfigurations, show on-screen
