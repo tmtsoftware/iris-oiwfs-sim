@@ -1,7 +1,13 @@
 #!/usr/bin/env python
 #
 # Simple simulation of IRIS OIWFS probe arm motion using 2d line segments and
-# circles for the heads.
+# circles for the heads. It is also possible to specify a position and
+# rotation of IRIS, star positions in celestial coordinates, and determine
+# the projected outline of the probes on the sky.
+#
+# Classes:
+#   Probe - Current orientation of a probe, velocity, and target star
+#   State - Manage a collection of probes, including collision avoidance
 
 import copy
 import itertools
