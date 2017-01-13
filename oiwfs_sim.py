@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 #
-# Simple simulation of IRIS OIWFS probe arm motion using 2d line segments
+# Simple simulation of IRIS OIWFS probe arm motion using 2d line segments and
+# circles for the heads.
 
 import copy
 import itertools
