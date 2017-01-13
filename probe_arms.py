@@ -10,7 +10,7 @@ import matplotlib.colors as colors
 import numpy as np
 import sys
 import time
-
+from astropy import wcs
 
 # Constants
 platescale    = 2.182   # platescale in OIWFS plane (mm/arcsec)
@@ -635,10 +635,21 @@ class State(object):
                  i_ref=None,
                  levels=None,
                  vectors=None,
-                 star_vel=None):
+                 star_vel=None,
+                 wcs=None):
 
-        # Initialize with an array of probes and no stars selected
-        self.probes = probes  # probe objects
+        if probes is None:
+            # Set up probes around edge of patrol area pointing in, with origins
+            # at r_origin from the centre of the FOV
+            self.probes=[]
+            for phi in np.arange(90, 360.+90, 360./3):
+                x = r_origin*np.cos(np.radians(phi))
+                y = r_origin*np.sin(np.radians(phi))
+                theta = np.radians(np.fmod(phi+180, 360))
+                self.probes.append(Probe(x,y,r0,theta))
+        else :
+            # Probes provided by caller
+            self.probes = probes
 
         self.stars = []       # star objects
         for i in range(maxstars):
@@ -1484,6 +1495,8 @@ class MencoderFileWriter(animation.FileMovieWriter, MencoderBase):
 
 # -----------------------------------------------------------------------------
 
+# Generate plots of different probe configurations
+
 def run_sim(animate='cont',             # one of 'cont','track',None
             dwell=200,                  # Dwell time
             contours=None,              # list of ['att','rep','tot']
@@ -1516,15 +1529,6 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             star_vel=None               # move stars across focal plane
 ):
 
-    # Set up probes around edge of patrol area pointing in, with origins
-    # at r_origin from the centre of the FOV
-    probes=[]
-    for phi in np.arange(90, 360.+90, 360./3):
-        x = r_origin*np.cos(np.radians(phi))
-        y = r_origin*np.sin(np.radians(phi))
-        theta = np.radians(np.fmod(phi+180, 360))
-        probes.append(Probe(x,y,r0,theta))
-
     # Set the initial OIWFS state and plot
 
     if i_ref is not None:
@@ -1533,7 +1537,7 @@ def run_sim(animate='cont',             # one of 'cont','track',None
     else:
         probe_cols = ['b','b','b']
 
-    s = State(probes,
+    s = State(None,
               figsize=figsize,
               dpi=dpi,
               fname=fname,
@@ -1658,7 +1662,70 @@ def run_sim(animate='cont',             # one of 'cont','track',None
     else:
         plt.show()
 
+
+# Configure probes based on where the telescope is pointed, the IRIS
+# rotator position angle, and the coordinates of stars assigned to each
+# probe. As a start, print out something resembling DS9 region
+# definitions in sky coordinates.
+# Notes:
+#   - the stars are provided in the same order as the probes. At a rotator
+#     PA of 0 deg, they are ordered counter-clockwise starting with the
+#     top probe
+#   - if the probe assignment is invalid, an exception will be thrown
+#     by the Probe.set_cart() calls:
+#     o ProbeLimitsException() if it is not within the Probe's patrol range
+#     o ProbeCollision()       if it would collide with another probe
+def oiwfs_sky(pointing,         # [ra,dec,PA] in degrees
+              stars             # [[ra,dec],[ra,dec],[ra,dec] in degrees
+):
+
+    # Initialize the OIWFS state
+    s = State(None)
+
+    # Set up WCS according to the pointing/instrument rotation
+    w = wcs.WCS(naxis=2)
+    w.wcs.crpix = [0, 0]  # center of the focal plane is tangent point
+    w.wcs.crval = [pointing[0], pointing[1]]  # boresight coordinates
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    pa = np.radians(pointing[2]) # rotator angle
+    w.wcs.cd = np.array([[-np.cos(pa),+np.sin(pa)], # includes RA sign flip
+                         [np.sin(pa),np.cos(pa)]]) * \
+                         (1./(platescale*3600.)) # deg/mm
+
+    # Convert star coordinates to focal plane coordinates and assign probes
+    # to them
+    stars_fplane = w.wcs_world2pix(stars,1)
+        
+    print w
+
+    print "Regions specified in degrees in RA, Dec"
+    for i in range(3):
+        s.stars[i].x = stars_fplane[i][0]    # set star location
+        s.stars[i].y = stars_fplane[i][1]
+        p = s.probes[i]                      # probe reference
+        p.star = s.stars[i]                  # associate star with probe
+        p.set_cart(p.star.x,p.star.y)        # move probe to its star
+
+        # generate lines and circles in sky coordinates
+        c_fplane = np.array([[p.x0,p.y0],[p.x,p.y]])
+        c = w.wcs_pix2world(c_fplane,1)
+
+        print "line (%f,%f,%f,%f)" % (c[0][0], c[0][1], c[1][0], c[1][1])
+        print "circle (%f,%f,%f)" % (c[1][0],c[1][1],r_head/(platescale*3600.))
+
+
+# -----------------------------------------------------------------------------
+
+# Example code
+        
 if __name__ == '__main__':
+
+    # Point OIWFS at a position on the sky.
+    oiwfs_sky([180.,1,10],
+              np.array([[180. + 0    ,1. + 0.006],
+                        [180. + 0.012,1. - 0.006],
+                        [180. - 0.012,1. - 0.006]]))
+    sys.exit(1)
 
     # animate a sequence of random reconfigurations, show on-screen
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1)
