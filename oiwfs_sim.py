@@ -24,7 +24,7 @@ platescale    = 2.182   # platescale in OIWFS plane (mm/arcsec)
 r_patrol      = 60*platescale # radius of the patrol area in (mm)
 r_max         = 300         # maximum extension of probes (mm)
 r_overshoot   = 20          # distance by which probes overshoot centre (mm)
-r_head        = 10.8 #10          # radius of probe head
+r_head        = 25/2.       # radius of probe head (mm)
 r_min         = r_patrol    # minimum extension of probes (mm)
 r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
 r0            = r_max-r_patrol # initial probe extension (mm)
@@ -1744,10 +1744,15 @@ if __name__ == '__main__':
                         [180. + 0.012,1. - 0.006],
                         [180. - 0.012,1. - 0.006]]),
               autoselect=False)
-    sys.exit(1)
+    # sys.exit(1)
 
     # animate a sequence of random reconfigurations, show on-screen
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1)
+
+    # animate a sequence of pre-selected asterisms, show on-screen
+    #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
+    #        aster=aster_seq,aster_select=True)
+
     
     # animated with vector field, write to file
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
@@ -1765,6 +1770,8 @@ if __name__ == '__main__':
     #        fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
     #sys.exit(1)
 
+
+    # --- Series of figures for SPIE paper --------------------------------
     #figtype = 'pdf'
     figtype = 'png'
 
