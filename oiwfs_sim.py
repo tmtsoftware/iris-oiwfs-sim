@@ -79,6 +79,11 @@ d_clear       = 2.*r_origin*np.cos(np.radians(30)) # total probe lengths clear
 # max value of collision potential
 u_col_max     = 0.5*alpha*(1/col_min - 1/tol_avoid)**alpha
 
+print "Max speed linear stage:",vr_max,"mm/s"
+print "Max speed rotary stage:",vt_max,"rad/s"
+
+#sys.exit(1)
+
 # sequence of predefined asterisms for testing
 aster_easy = [
     [  (-113,  19), ( -22,  44), (22,22) ],
@@ -1747,7 +1752,7 @@ if __name__ == '__main__':
     # sys.exit(1)
 
     # animate a sequence of random reconfigurations, show on-screen
-    #run_sim(animate='cont',display=True,dwell=50,frameskip=1)
+    run_sim(animate='cont',display=True,dwell=50,frameskip=1)
 
     # animate a sequence of pre-selected asterisms, show on-screen
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
@@ -1781,6 +1786,7 @@ if __name__ == '__main__':
 
     # show contours for normal situation
     plotlim=[-150,150,-150,150]
+    
     contour_steps = 1
     levels = np.logspace(-1.8,0.2,40,endpoint=True)
     aster = [[ (-65,7), (-35,-15), (70,0) ]]
