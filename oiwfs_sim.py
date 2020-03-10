@@ -18,6 +18,7 @@ import numpy as np
 import sys
 import time
 from astropy import wcs
+import random
 
 # Constants
 platescale    = 2.182   # platescale in OIWFS plane (mm/arcsec)
@@ -214,6 +215,9 @@ class Star(Point):
 
         # display element for star that will be animated when updated
         self.symbol = None
+
+        # catalog entry index if relevant
+        self.catindex = None
 
     def update_symbol(self):
         """ Update the star symbol """
@@ -710,6 +714,7 @@ class State(object):
             self.catalog_xdeg, self.catalog_ydeg = np.loadtxt(catalog,unpack=True)
             self.catalog_x = self.catalog_xdeg*3600*platescale  # mm
             self.catalog_y = self.catalog_ydeg*3600*platescale  # mm
+            self.catalog_assigned = np.array([False]*len(self.catalog_x))
 
         # Starting OIWFS pointing provided in catalog coordinates
         if catalog_start:
@@ -1245,10 +1250,35 @@ class State(object):
                 if self.catalog:
                     # We're crab-walking through a catalog
                     
+                    
                     # Which stars are in the OIWFS patrol area
                     star_dist = np.sqrt((self.catalog_x - self.oiwfs_x0)**2 + \
                         (self.catalog_y - self.oiwfs_y0)**2)
-                    infield = np.where(star_dist <= r_patrol)[0]
+                    infield = np.where((star_dist <= r_patrol) & (self.catalog_assigned == False))[0]
+
+                    # Initial assignment of stars
+                    if all(s.x is None for s in self.stars):
+                        # Randomly select 3 different stars from infield and
+                        # try to assign. Keep choosing until we find an asterism
+                        # that works
+                        success = False
+                        for test in range(100):
+                            test_i = random.sample(infield,3)
+                            for k in range(3):
+                                s = self.stars[k]
+                                s.x = self.catalog_x[test_i[k]] - self.oiwfs_x0
+                                s.y = self.catalog_y[test_i[k]] - self.oiwfs_y0
+                                s.catindex = test_i[k]
+                            if self.select_probes():
+                                success = True
+                                for s in self.stars:
+                                    self.catalog_assigned[s.catindex] = True
+                                break
+                        if not success:
+                            print("Could not establish starting config")
+                            sys.exit(1)
+                            
+
 
                     # Any empty star slots, or stars that went out of the
                     # patrol area get assigned new stars from the catalog
@@ -1258,6 +1288,7 @@ class State(object):
                         if s.x is None or s.y is None:
                             new = True
                         elif np.sqrt(s.x**2 + s.y**2) > r_patrol:
+                            self.catalog_assigned[s.catindex] = False
                             new = True
                         
                         if new:
@@ -1266,6 +1297,7 @@ class State(object):
                             # that lands in the patrol area
                             s.x = self.catalog_x[infield[j]] - self.oiwfs_x0
                             s.y = self.catalog_y[infield[j]] - self.oiwfs_y0
+                            self.catalog_assigned[infield[j]] = True
                             
                     # Move the visible stars
                     for s in self.stars:
