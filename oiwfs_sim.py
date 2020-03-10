@@ -637,6 +637,8 @@ class State(object):
                  use_vel_servo=False,
                  tran_scale=3,
                  aster_start=0,
+                 catalog=None,
+                 catalog_start=None,
                  probe_cols=['b','b','b'],
                  display=True,
                  dwell=200,
@@ -700,6 +702,23 @@ class State(object):
         self.vectors=vectors
         self.vectors_object=None
         self.star_vel=star_vel
+        if catalog is not None:
+            # File is assumed to consist of x, y columns of positions
+            # in degrees. Also assume that they are at a low Dec. So
+            # just convert directly into mm offsets using platescale
+            self.catalog = catalog
+            self.catalog_xdeg, self.catalog_ydeg = np.loadtxt(catalog,unpack=True)
+            self.catalog_x = self.catalog_xdeg*3600*platescale  # mm
+            self.catalog_y = self.catalog_ydeg*3600*platescale  # mm
+
+        # Starting OIWFS pointing provided in catalog coordinates
+        if catalog_start:
+            self.oiwfs_x0 = catalog_start[0]*3600*platescale # mm
+            self.oiwfs_y0 = catalog_start[1]*3600*platescale # mm
+        else:
+            self.oiwfs_x0 = 0
+            self.oiwfs_y0 = 0
+
 
         if i_ref is not None:
             self.i_ref = i_ref
@@ -1223,32 +1242,72 @@ class State(object):
             update = True
 
             if self.star_vel:
-                # Move stars if requested
-                for j in range(len(self.stars)):
-                    s = self.stars[j]
-                    p = self.probes[j]
-                    p.star = s
+                if self.catalog:
+                    # We're crab-walking through a catalog
+                    
+                    # Which stars are in the OIWFS patrol area
+                    star_dist = np.sqrt((self.catalog_x - self.oiwfs_x0)**2 + \
+                        (self.catalog_y - self.oiwfs_y0)**2)
+                    infield = np.where(star_dist <= r_patrol)[0]
 
-                    if s.x is None or s.y is None:
-                        s.x,s.y = self.aster[0][j]
+                    # Any empty star slots, or stars that went out of the
+                    # patrol area get assigned new stars from the catalog
+                    for j in range(len(self.stars)):
+                        s = self.stars[j]
+                        new = False
+                        if s.x is None or s.y is None:
+                            new = True
+                        elif np.sqrt(s.x**2 + s.y**2) > r_patrol:
+                            new = True
+                        
+                        if new:
+                            # As an initial hack this just selects the first
+                            # stars that appear in the subset of the catalog
+                            # that lands in the patrol area
+                            s.x = self.catalog_x[infield[j]] - self.oiwfs_x0
+                            s.y = self.catalog_y[infield[j]] - self.oiwfs_y0
+                            
+                    # Move the visible stars
+                    for s in self.stars:
+                        if s.x is not None and s.y is not None:
+                            s.x = s.x + self.star_vel[0]*dt
+                            s.y = s.y + self.star_vel[1]*dt
 
-                    xnew = s.x + self.star_vel[0]*dt
-                    ynew = s.y + self.star_vel[1]*dt
+                    # The OIWFS pointing moves in the opposite sense of star_vel
+                    self.oiwfs_x0 = self.oiwfs_x0 - self.star_vel[0]*dt
+                    self.oiwfs_y0 = self.oiwfs_y0 - self.star_vel[1]*dt
 
-                    r,theta=p.cart2pol(xnew,ynew)
+                    # Currently just hacking to see if starfield moves, so no
+                    # probe movement.
+                    update = False
+                    
+                else:
+                    # Moving several canned stars
+                    for j in range(len(self.stars)):
+                        s = self.stars[j]
+                        p = self.probes[j]
+                        p.star = s
 
-                    if (np.sqrt(xnew**2 + ynew**2) < r_patrol) and \
-                       (r < r_max):
-                        # Move star if within FOV
-                        s.x = xnew
-                        s.y = ynew
-                    else:
-                        # Otherwise switch to next star
-                        self.i_vaster[j] = (self.i_vaster[j]+1) % \
-                                            len(self.aster)
-                        s.x,s.y = self.aster[self.i_vaster[j]][j]
-                        p.trail_x = []
-                        p.trail_y = []
+                        if s.x is None or s.y is None:
+                            s.x,s.y = self.aster[0][j]
+
+                        xnew = s.x + self.star_vel[0]*dt
+                        ynew = s.y + self.star_vel[1]*dt
+
+                        r,theta=p.cart2pol(xnew,ynew)
+
+                        if (np.sqrt(xnew**2 + ynew**2) < r_patrol) and \
+                        (r < r_max):
+                            # Move star if within FOV
+                            s.x = xnew
+                            s.y = ynew
+                        else:
+                            # Otherwise switch to next star
+                            self.i_vaster[j] = (self.i_vaster[j]+1) % \
+                                                len(self.aster)
+                            s.x,s.y = self.aster[self.i_vaster[j]][j]
+                            p.trail_x = []
+                            p.trail_y = []
 
             else:
                 # Select new stars if we're stopped
@@ -1520,6 +1579,8 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             aster=None,                 # sequence of predefined asterisms
             aster_select=False,         # use predefined star selection?
             aster_start=0,              # Start index in aster
+            catalog=None,               # Provide filename of star catalog (deg)
+            catalog_start=None,         # Starting OIWFS coordinates (deg)
             use_tran=True,              # use transverse component?
             tran_scale=3,               # strength of transverse component
             figsize=(5.5,5),            # figure size
@@ -1563,6 +1624,8 @@ def run_sim(animate='cont',             # one of 'cont','track',None
               use_vel_servo=use_vel_servo,
               tran_scale=tran_scale,
               aster_start=aster_start,
+              catalog=catalog,
+              catalog_start=catalog_start,
               probe_cols=probe_cols,
               display=display,
               dwell=dwell,
@@ -1752,7 +1815,7 @@ if __name__ == '__main__':
     # sys.exit(1)
 
     # animate a sequence of random reconfigurations, show on-screen
-    run_sim(animate='cont',display=True,dwell=50,frameskip=1)
+    #run_sim(animate='cont',display=True,dwell=50,frameskip=1)
 
     # animate a sequence of pre-selected asterisms, show on-screen
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
@@ -1769,12 +1832,18 @@ if __name__ == '__main__':
 
 
     # animated non-sidereal tracking, write to file
-    #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
+    #run_sim(animate='cont',display=True,dwell=0,frameskip=1,
     #        plotlim=[-150,150,-150,150], star_vel=[0.5,2],
     #        aster=aster_move,aster_select=True)#,
     #        fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
     #sys.exit(1)
 
+
+    # animated non-sidereal tracking scrolling through catalog, show on-screen
+    run_sim(animate='cont',display=True,dwell=0,frameskip=1,
+            plotlim=[-150,150,-150,150], star_vel=[-2,0],
+            catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
+            #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
 
     # --- Series of figures for SPIE paper --------------------------------
     #figtype = 'pdf'
