@@ -714,6 +714,9 @@ class State(object):
             self.catalog_xdeg, self.catalog_ydeg = np.loadtxt(catalog,unpack=True)
             self.catalog_x = self.catalog_xdeg*3600*platescale  # mm
             self.catalog_y = self.catalog_ydeg*3600*platescale  # mm
+            self.catalog_stars = np.array([Star(self.catalog_x[i],self.catalog_y[i]) for i in range(len(self.catalog_x))])
+            for i in range(len(self.catalog_stars)):
+                self.catalog_stars[i].index = i # hack
             self.catalog_assigned = np.array([False]*len(self.catalog_x))
 
         # Starting OIWFS pointing provided in catalog coordinates
@@ -845,7 +848,7 @@ class State(object):
                             star.x, star.y = pos
 
 
-    def select_probes(self):
+    def select_probes(self,probe_subset=None,star_vel=None,catalog_subset=None):
 
         # Using predefined asterisms / configurations
         if self.aster and self.aster_select:
@@ -854,81 +857,122 @@ class State(object):
                 s = self.stars[i]
                 p.star = s
             return True
+        
         # Select a probe for each star:
         #  - test all probe / star permuations
         #  - reject invalid configurations
         #  - of valid configurations, choose the best
+        #  - optionally only reconfigure a subset of the probes
+        #  - if star_vel provided, weight configs coming from that direction
+        #  - if catalog_subset provided, find best matches from catalog (> 3 stars)
 
-        configs = [] # list of valid configs, will contain score
+        if catalog_subset is None:
+            all_stars = self.stars
+        else:
+            all_stars = self.catalog_stars[catalog_subset]
 
-        # Remember old probe positions
-        old_xy = [(p.x,p.y) for p in self.probes]
+        # Remember old probe positions and stars
+        old_probe_xy = [(p.x,p.y) for p in self.probes]
+        old_star_xy = [(s.x,s.y) for s in self.stars]
 
-        # Check all possible probe configurations
-        for probe_index in itertools.permutations(range(3),3):
-            #print 'config:', probe_index
+        configs = [] # list of valid configs, will contain merit for ranking
 
-            # Test probe positions in this configuration
-            try:
-                for i in range(maxstars):
-                    s = self.stars[i]
-                    p = self.probes[probe_index[i]]
-                    p.set_cart(s.x,s.y)
-                    p.star = s
-            except ProbeLimitsException:
-                # Configuration exceeds probe actuator limits
-                #print "Exceed probe limits."
-                continue
+        # Iterate over all subsets of 3 stars
+        for test_stars in itertools.combinations(all_stars,3):
 
-            # Check for probe collisions (using minimum star distance as
-            # threshold) in this configuration
-            collides = False
-            for i in itertools.combinations(range(3),2):
-                #print "check config: (%i,%i)" % (i[0], i[1])
-                this_d,a,b = self.probes[i[0]].dist(self.probes[i[1]])
-                #print '     this_d=',this_d
-                if this_d < r_star:
-                    #print '  bad'
-                    collides = True
-                    break
-            if collides:
-                #print "collides"
-                continue
-            #print '  good'
+            # Set star positions to test values
+            for i in range(len(self.stars)):
+                self.stars[i].x = test_stars[i].x
+                self.stars[i].y = test_stars[i].y
+
+            # Check all possible probe configurations
+            for probe_index in itertools.permutations(range(3),3):
+                #print 'config:', probe_index
+
+                # Test probe positions in this configuration
+                try:
+                    for i in range(maxstars):
+                        s = self.stars[i]
+                        p = self.probes[probe_index[i]]
+                        p.set_cart(s.x,s.y)
+                        p.star = s
+                except ProbeLimitsException:
+                    # Configuration exceeds probe actuator limits
+                    #print "Exceed probe limits."
+                    continue
+
+                # Check for probe collisions (using minimum star distance as
+                # threshold) in this configuration
+                collides = False
+                for i in itertools.combinations(range(3),2):
+                    #print "check config: (%i,%i)" % (i[0], i[1])
+                    this_d,a,b = self.probes[i[0]].dist(self.probes[i[1]])
+                    #print '     this_d=',this_d
+                    if this_d < r_star:
+                        #print '  bad'
+                        collides = True
+                        break
+                if collides:
+                    #print "collides"
+                    continue
+                #print '  good'
 
 
-            # Configuration is valid. Calculate figure of merit:
-            # - minimize maximum probe extension
-            merit = np.max(np.array([p.r for p in self.probes]))
+                # Configuration is valid. Calculate figure of merit:
+                # - minimize maximum probe extension
+                merit = np.max(np.array([p.r for p in self.probes]))
 
-            configs.append({'probes':probe_index, 'merit':merit})
+                configs.append({
+                    'stars':test_stars,
+                    'probes':probe_index,
+                    'merit':merit})
+        
 
-        # Return probes to old settings
+        # Return probes and stars to old settings
         for i in range(len(self.probes)):
-            self.probes[i].set_cart(old_xy[i][0], old_xy[i][1])
+            self.probes[i].set_cart(old_probe_xy[i][0], old_probe_xy[i][1])
+        for i in range(len(self.stars)):
+            self.stars[i].x = old_star_xy[i][0]
+            self.stars[i].y = old_star_xy[i][1]
 
         # Select the best configuration
         min_merit = None
         best = None
+
         for c in configs:
+            # Loop over possible probe configurations
+            print c
             if best is None:
                 best = c['probes']
                 min_merit = c['merit']
+                best_stars = c['stars']
             elif c['merit'] < min_merit:
                 min_merit = c['merit']
                 best = c['probes']
+                best_stars = c['stars']
+    
         if best is None:
+            # Couldn't find a star + probe assignment configuration
             return False
 
         for i in range(maxstars):
+            # Update star positions to best values
+            self.stars[i].x = best_stars[i].x
+            self.stars[i].y = best_stars[i].y
+            
             # Update probes to include selected star references
             p = self.probes[best[i]]
             s = self.stars[i]
             p.star = s
 
+            # update which catalog stars assigned
+            if catalog_subset is not None:
+                for s in best_stars:
+                    self.catalog_assigned[s.index] = True
+
         for i in range(3):
             p = self.probes[i]
-            #print 'Select Probe',i,':',p.x,p.y,p.star.x,p.star.y
+            print 'Select Probe',i,':',p.x,p.y,p.star.x,p.star.y
 
         return True
 
@@ -1258,27 +1302,10 @@ class State(object):
 
                     # Initial assignment of stars
                     if all(s.x is None for s in self.stars):
-                        # Randomly select 3 different stars from infield and
-                        # try to assign. Keep choosing until we find an asterism
-                        # that works
-                        success = False
-                        for test in range(100):
-                            test_i = random.sample(infield,3)
-                            for k in range(3):
-                                s = self.stars[k]
-                                s.x = self.catalog_x[test_i[k]] - self.oiwfs_x0
-                                s.y = self.catalog_y[test_i[k]] - self.oiwfs_y0
-                                s.catindex = test_i[k]
-                            if self.select_probes():
-                                success = True
-                                for s in self.stars:
-                                    self.catalog_assigned[s.catindex] = True
-                                break
+                        success = self.select_probes(catalog_subset=infield)
                         if not success:
                             print("Could not establish starting config")
                             sys.exit(1)
-                            
-
 
                     # Any empty star slots, or stars that went out of the
                     # patrol area get assigned new stars from the catalog
@@ -1292,6 +1319,20 @@ class State(object):
                             new = True
                         
                         if new:
+                            # Assume that probes have already been assigned to
+                            # stars. If we get here, we are re-assigning a single
+                            # probe. So cycle through the stars in the field for
+                            # this one probe. Assign merit based on how far
+                            # the star is in the direction we are headed, and how
+                            # short the retraction
+
+                            for p in self.probes:
+                                if p.star == s:
+                                    # Reset the star trail
+                                    p.trail_x = []
+                                    p.trail_y = []
+
+
                             # As an initial hack this just selects the first
                             # stars that appear in the subset of the catalog
                             # that lands in the patrol area
