@@ -849,6 +849,17 @@ class State(object):
 
 
     def select_probes(self,probe_subset=None,star_vel=None,catalog_subset=None):
+        # Select a probe for each star:
+        #  - test all probe / star permuations
+        #  - reject invalid configurations
+        #  - of valid configurations, choose the best
+        #  - optionally only reconfigure a subset of the probes
+        #  - if star_vel provided, weight configs coming from that direction
+        #  - if catalog_subset provided, find best matches from catalog (> 3 stars)
+        #
+        # It is up to the caller to ensure that catalog_subset only contains
+        # stars not currently being tracked (i.e., ensure consistency with
+        # probe_subset)
 
         # Using predefined asterisms / configurations
         if self.aster and self.aster_select:
@@ -858,17 +869,31 @@ class State(object):
                 p.star = s
             return True
         
-        # Select a probe for each star:
-        #  - test all probe / star permuations
-        #  - reject invalid configurations
-        #  - of valid configurations, choose the best
-        #  - optionally only reconfigure a subset of the probes
-        #  - if star_vel provided, weight configs coming from that direction
-        #  - if catalog_subset provided, find best matches from catalog (> 3 stars)
+        probes_tracking = [] # indices of tracking probes
+        test_star_slots = []
+        if probe_subset:
+            # If only a subset of the probes are to be reconfigured, figure out
+            # which ones are still tracking
+            for i in range(len(self.probes)):
+                if i not in probe_subset:
+                    probes_tracking.append(i)
+
+            # Which star slots are free?
+            for i in probe_subset:
+                for j in range(len(self.stars)):
+                    if self.probes[i].star == self.stars[j]:
+                        test_star_slots.append(j)
+        else:
+            # All probes to be reconfigured
+            probe_subset=[0,1,2]
+            # All star slots are free
+            test_star_slots=[0,1,2]
 
         if catalog_subset is None:
             all_stars = self.stars
         else:
+            # Only stars that aren't currently assigned should be in this
+            # catalog (i.e., it should be consistent with probe_subset)
             all_stars = self.catalog_stars[catalog_subset]
 
         # Remember old probe positions and stars
@@ -877,22 +902,25 @@ class State(object):
 
         configs = [] # list of valid configs, will contain merit for ranking
 
-        # Iterate over all subsets of 3 stars
-        for test_stars in itertools.combinations(all_stars,3):
+        # Iterate over all test star subsets in all_stars
+        for test_stars in itertools.combinations(all_stars,len(test_star_slots)):
 
             # Set star positions to test values
-            for i in range(len(self.stars)):
-                self.stars[i].x = test_stars[i].x
-                self.stars[i].y = test_stars[i].y
-
-            # Check all possible probe configurations
-            for probe_index in itertools.permutations(range(3),3):
+            #for i in range(len(self.stars)):
+            for i in range(len(test_stars)):
+                test_star_slot = test_star_slots[i]
+                self.stars[test_star_slot].x = test_stars[i].x
+                self.stars[test_star_slot].y = test_stars[i].y
+            
+            # Check all possible configurations for probes being configured
+            for probe_index in itertools.permutations(probe_subset,len(probe_subset)):
                 #print 'config:', probe_index
 
                 # Test probe positions in this configuration
                 try:
-                    for i in range(maxstars):
-                        s = self.stars[i]
+                    for i in range(len(probe_subset)):
+                        test_star_slot = test_star_slots[i]
+                        s = self.stars[test_star_slot]
                         p = self.probes[probe_index[i]]
                         p.set_cart(s.x,s.y)
                         p.star = s
@@ -902,7 +930,8 @@ class State(object):
                     continue
 
                 # Check for probe collisions (using minimum star distance as
-                # threshold) in this configuration
+                # threshold) in this configuration. Note that we check all
+                # probes here, not just the subset being reconfigured.
                 collides = False
                 for i in itertools.combinations(range(3),2):
                     #print "check config: (%i,%i)" % (i[0], i[1])
@@ -952,23 +981,30 @@ class State(object):
                 best_stars = c['stars']
     
         if best is None:
-            # Couldn't find a star + probe assignment configuration
+            # Couldn't find a star + probe assignment configuration. So,
+            # probes that were to be reconfigured are assigned None star
+
+            for i in probe_subset:
+                p = self.probes[i]
+                p.star = None
+
             return False
 
-        for i in range(maxstars):
+        for i in range(len(test_stars)):
+            test_star_slot = test_star_slots[i]
+            s = self.stars[test_star_slot]
             # Update star positions to best values
-            self.stars[i].x = best_stars[i].x
-            self.stars[i].y = best_stars[i].y
+            s.x = best_stars[i].x
+            s.y = best_stars[i].y
             
             # Update probes to include selected star references
             p = self.probes[best[i]]
-            s = self.stars[i]
             p.star = s
 
-            # update which catalog stars assigned
-            if catalog_subset is not None:
-                for s in best_stars:
-                    self.catalog_assigned[s.index] = True
+        # update which catalog stars assigned
+        if catalog_subset is not None:
+            for s in best_stars:
+                self.catalog_assigned[s.index] = True
 
         for i in range(3):
             p = self.probes[i]
@@ -1292,8 +1328,7 @@ class State(object):
 
             if self.star_vel:
                 if self.catalog:
-                    # We're crab-walking through a catalog
-                    
+                    # We're crab-walking through a catalog                
                     
                     # Which stars are in the OIWFS patrol area
                     star_dist = np.sqrt((self.catalog_x - self.oiwfs_x0)**2 + \
@@ -1307,8 +1342,9 @@ class State(object):
                             print("Could not establish starting config")
                             sys.exit(1)
 
-                    # Any empty star slots, or stars that went out of the
-                    # patrol area get assigned new stars from the catalog
+                    # Probes tracking stars that went out of the
+                    # patrol area get flagged for needing reconfiguration
+                    need_reconfig=[]
                     for j in range(len(self.stars)):
                         s = self.stars[j]
                         new = False
@@ -1319,16 +1355,14 @@ class State(object):
                             new = True
                         
                         if new:
-                            # Assume that probes have already been assigned to
-                            # stars. If we get here, we are re-assigning a single
-                            # probe. So cycle through the stars in the field for
-                            # this one probe. Assign merit based on how far
-                            # the star is in the direction we are headed, and how
-                            # short the retraction
-
-                            for p in self.probes:
+                            # Figure out which probe tracks this star and
+                            # flag
+                            #for p in self.probes:
+                            for k in range(len(self.probes)):
+                                p = self.probes[k]
                                 if p.star == s:
-                                    # Reset the star trail
+                                    need_reconfig.append(k)
+                                    # Reset the star trail for this probe
                                     p.trail_x = []
                                     p.trail_y = []
 
@@ -1336,10 +1370,18 @@ class State(object):
                             # As an initial hack this just selects the first
                             # stars that appear in the subset of the catalog
                             # that lands in the patrol area
-                            s.x = self.catalog_x[infield[j]] - self.oiwfs_x0
-                            s.y = self.catalog_y[infield[j]] - self.oiwfs_y0
-                            self.catalog_assigned[infield[j]] = True
-                            
+                            #s.x = self.catalog_x[infield[j]] - self.oiwfs_x0
+                            #s.y = self.catalog_y[infield[j]] - self.oiwfs_y0
+                            #self.catalog_assigned[infield[j]] = True
+
+                    # Perform reconfigs
+                    if need_reconfig:
+                        success = self.select_probes(probe_subset=need_reconfig, \
+                            catalog_subset=infield)
+                        if not success:
+                            print("Could not reconfig probes")
+                            sys.exit(1)
+
                     # Move the visible stars
                     for s in self.stars:
                         if s.x is not None and s.y is not None:
@@ -1352,7 +1394,7 @@ class State(object):
 
                     # Currently just hacking to see if starfield moves, so no
                     # probe movement.
-                    update = False
+                    #update = False
                     
                 else:
                     # Moving several canned stars
