@@ -341,6 +341,9 @@ class Probe(object):
         self.trail_y = []
         self.head = None
 
+        # Calculate the home/parked position
+        self.x_home,self.y_home = self.pol2cart(r0,self.theta_home)
+
     def set_cart(self, x, y):
         """ Set probe tips to new x, y location """
         self.x = x
@@ -507,6 +510,11 @@ class Probe(object):
         if self.moving is None:
             return
 
+        if self.star is None:
+            sTarg = Star(self.x_home,self.y_home)
+        else:
+            sTarg = self.star
+
         #if use_vel_servo:
         #    self.vr = self.vr + self.ar*dt
         #    self.vt = self.vt + self.at*dt
@@ -514,7 +522,7 @@ class Probe(object):
         #print "move1:",(self.r, np.degrees(self.theta)), \
         #    (self.vr*dt, np.degrees(self.vt*dt))
 
-        s_r,s_t = self.cart2pol(self.star.x,self.star.y)
+        s_r,s_t = self.cart2pol(sTarg.x,sTarg.y)
         targ_vr = (s_r - self.r)/dt
         targ_vt = (s_t - self.theta)/dt
 
@@ -530,6 +538,7 @@ class Probe(object):
         #else:
         r = self.r + self.vr*dt
         theta = self.theta + self.vt*dt
+        
         self.set_pol(r, theta)
 
         #print "move2:",(self.r, np.degrees(self.theta))
@@ -878,11 +887,19 @@ class State(object):
                 if i not in probe_subset:
                     probes_tracking.append(i)
 
-            # Which star slots are free?
+            # Which star slots are pointed to by the probes to be reconfigured?
             for i in probe_subset:
                 for j in range(len(self.stars)):
                     if self.probes[i].star == self.stars[j]:
                         test_star_slots.append(j)
+
+            # Are there any remaining star slots not pointed to by any of the
+            # probes?
+            for i in range(len(self.stars)):
+                s = self.stars[i]
+                if s not in [p.star for p in self.probes]:
+                    test_star_slots.append(i)
+
         else:
             # All probes to be reconfigured
             probe_subset=[0,1,2]
@@ -895,6 +912,12 @@ class State(object):
             # Only stars that aren't currently assigned should be in this
             # catalog (i.e., it should be consistent with probe_subset)
             all_stars = self.catalog_stars[catalog_subset]
+            for i in range(len(catalog_subset)):
+                # Adjust for current OIWFS pointing
+                all_stars[i].x = all_stars[i].x - self.oiwfs_x0
+                all_stars[i].y = all_stars[i].y - self.oiwfs_y0
+                # Include the catalog index
+                all_stars[i].catindex = catalog_subset[i]
 
         # Remember old probe positions and stars
         old_probe_xy = [(p.x,p.y) for p in self.probes]
@@ -949,13 +972,13 @@ class State(object):
 
                 # Configuration is valid. Calculate figure of merit:
                 # - minimize maximum probe extension
-                merit = np.max(np.array([p.r for p in self.probes]))
+                #merit = np.max(np.array([p.r for p in self.probes]))
+                merit = np.max(np.array([self.probes[i].r for i in probe_subset]))
 
                 configs.append({
                     'stars':test_stars,
                     'probes':probe_index,
                     'merit':merit})
-        
 
         # Return probes and stars to old settings
         for i in range(len(self.probes)):
@@ -983,10 +1006,11 @@ class State(object):
         if best is None:
             # Couldn't find a star + probe assignment configuration. So,
             # probes that were to be reconfigured are assigned None star
-
             for i in probe_subset:
                 p = self.probes[i]
-                p.star = None
+                if p.star is not None:
+                    p.star.index = False
+                    p.star = None
 
             return False
 
@@ -996,19 +1020,30 @@ class State(object):
             # Update star positions to best values
             s.x = best_stars[i].x
             s.y = best_stars[i].y
-            
+
+            # Record the catalog index of the star
+            s.catindex = best_stars[i].catindex
+
+            # Indicate that this catalog star is assigned
+            self.catalog_assigned[s.catindex] = True
+
             # Update probes to include selected star references
             p = self.probes[best[i]]
             p.star = s
 
         # update which catalog stars assigned
-        if catalog_subset is not None:
-            for s in best_stars:
-                self.catalog_assigned[s.index] = True
+        #if catalog_subset is not None:
+        #    for s in best_stars:
+        #        self.catalog_assigned[s.index] = True
 
         for i in range(3):
             p = self.probes[i]
-            print 'Select Probe',i,':',p.x,p.y,p.star.x,p.star.y
+            if p.star is None:
+                sTarg = Star(p.x_home,p.y_home)
+            else:
+                sTarg = p.star
+
+            print 'Select Probe',i,':',p.x,p.y,sTarg.x,sTarg.y
 
         return True
 
@@ -1076,8 +1111,18 @@ class State(object):
                     # 0. Origin at tip of probe_a, terminates at
                     # target star.
 
+                    if probe_a.star:
+                        aTarg = probe_a.star
+                    else:
+                        aTarg = Star(probe_a.x_home,probe_a.y_home)
+
+                    if probe_b.star:
+                        bTarg = probe_b.star
+                    else:
+                        bTarg = Star(probe_b.x_home,probe_b.y_home)
+
                     pt = Probe(probe_a.x, probe_a.y, 0, 0, r_head=0)
-                    (pt.x, pt.y) = (probe_a.star.x, probe_a.star.y)
+                    (pt.x, pt.y) = (aTarg.x, aTarg.y)
 
                     if info:
                         print "here: ",pt.x0,pt.y0,pt.x,pt.y,probe_b.x,probe_b.y
@@ -1091,11 +1136,11 @@ class State(object):
                         # the correct vector orthogonal to the
                         # repulsive vector.
 
-                        s_r,s_theta = probe_b.cart2pol(probe_a.star.x,
-                                                       probe_a.star.y)
+                        s_r,s_theta = probe_b.cart2pol(aTarg.x,
+                                                       aTarg.y)
 
-                        t_r,t_theta = probe_b.cart2pol(probe_b.star.x,
-                                                       probe_b.star.y)
+                        t_r,t_theta = probe_b.cart2pol(bTarg.x,
+                                                       bTarg.y)
 
                         thetas = np.unwrap([s_theta,t_theta])
 
@@ -1138,9 +1183,17 @@ class State(object):
                                              grad_j
 
         # Now do the attractive potentials
+        # If a probe isn't currently assigned to a star, point it toward its
+        # home position
         for i in range(3):
             probe = self.probes[i]
-            u,grad = probe.u_target(probe.star.x,probe.star.y)
+
+            if probe.star:
+                sTarg = probe.star
+            else:
+                sTarg = Star(probe.x_home,probe.y_home)
+
+            u,grad = probe.u_target(sTarg.x,sTarg.y)
 
             #print "Attract",i,':',u,grad
 
@@ -1155,7 +1208,11 @@ class State(object):
         # they point, and update the probe velocities
         for i in range(3):
             p = self.probes[i]
-            s = p.star
+            if p.star:
+                s = p.star
+            else:
+                s = Star(p.x_home,p.y_home)
+
             theta = p.theta
             r = p.r
 
@@ -1169,9 +1226,18 @@ class State(object):
                     # If tracking moving stars, set probe positions to
                     # the target and continue to next probe to make
                     # animation smoother
-                    p.set_cart(s.x,s.y)
+
+                    old_x = s.x
+                    old_y = s.y
+                    try:   
+                        p.set_cart(s.x,s.y)
+                    except (ProbeLimitsException,ProbeCollision):
+                        # Can't go here so just revert the move for now. The invalid
+                        # target star will be caught elsewhere and trigger a reconfig
+                        p.set_cart(old_x,old_y)
                     p.trail_x.append(p.x)
                     p.trail_y.append(p.y)
+                
                 else:
                     # We're there, so stop moving
                     p.moving = None
@@ -1258,7 +1324,7 @@ class State(object):
                     info = False
 
                     # Work out the accelerations, new velocities
-                    star_r, star_theta = p.cart2pol(p.star.x, p.star.y)
+                    star_r, star_theta = p.cart2pol(s.x, s.y)
 
                     delta_r = star_r - p.r
                     thetas = np.unwrap([p.theta,star_theta])
@@ -1342,29 +1408,57 @@ class State(object):
                             print("Could not establish starting config")
                             sys.exit(1)
 
-                    # Probes tracking stars that went out of the
-                    # patrol area get flagged for needing reconfiguration
+                    # Probes tracking stars that are no longer valid targets
+                    # get flagged as needing reconfiguration.
+                    # Also, any probe not currently tracking a star is also
+                    # flagged.
                     need_reconfig=[]
-                    for j in range(len(self.stars)):
-                        s = self.stars[j]
-                        new = False
-                        if s.x is None or s.y is None:
-                            new = True
-                        elif np.sqrt(s.x**2 + s.y**2) > r_patrol:
-                            self.catalog_assigned[s.catindex] = False
-                            new = True
+                    for k in range(len(self.probes)):
+                        p = self.probes[k]
+                        if p.star is None:
+                            need_reconfig.append(k)
+                        else:
+                            # try setting probe to current star position
+                            old_x = p.x
+                            old_y = p.y
+
+                            try:
+                                p.set_cart(p.star.x,p.star.y)
+                            except (ProbeLimitsException,ProbeCollision):
+                                # can't move here so stop tracking
+                                self.catalog_assigned[p.star.catindex] = False
+                                p.star = None
+                                p.trail_x = []
+                                p.trail_y = []
+
+                                # flag as needing reconfig
+                                need_reconfig.append(k)
+                                print("Here",k)
+                            
+                            # revert position after test
+                            p.set_cart(old_x,old_y)
+
+
+                    #for j in range(len(self.stars)):
+                    #    s = self.stars[j]
+                    #    new = False
+                    #    if s.x is None or s.y is None:
+                    #        new = True
+                    #    elif np.sqrt(s.x**2 + s.y**2) > r_patrol:
+                    #        self.catalog_assigned[s.catindex] = False
+                    #        new = True
                         
-                        if new:
+                    #    if new:
                             # Figure out which probe tracks this star and
                             # flag
                             #for p in self.probes:
-                            for k in range(len(self.probes)):
-                                p = self.probes[k]
-                                if p.star == s:
-                                    need_reconfig.append(k)
+                    #        for k in range(len(self.probes)):
+                    #            p = self.probes[k]
+                    #            if p.star == s:
+                    #                need_reconfig.append(k)
                                     # Reset the star trail for this probe
-                                    p.trail_x = []
-                                    p.trail_y = []
+                    #                p.trail_x = []
+                    #                p.trail_y = []
 
 
                             # As an initial hack this just selects the first
@@ -1374,13 +1468,20 @@ class State(object):
                             #s.y = self.catalog_y[infield[j]] - self.oiwfs_y0
                             #self.catalog_assigned[infield[j]] = True
 
+                    # Any probe not currently tracking a star is also flagged
+                    # for reconfiguration
+                    #for k in range(len(self.probes)):
+                    #    p = self.probes[k]
+                    #    if p.star is None:
+                    #        need_reconfig.append(k)
+
                     # Perform reconfigs
                     if need_reconfig:
                         success = self.select_probes(probe_subset=need_reconfig, \
                             catalog_subset=infield)
-                        if not success:
-                            print("Could not reconfig probes")
-                            sys.exit(1)
+                        #if not success:
+                        #    print("Could not reconfig probes")
+                        #    sys.exit(1)
 
                     # Move the visible stars
                     for s in self.stars:
@@ -1392,7 +1493,7 @@ class State(object):
                     self.oiwfs_x0 = self.oiwfs_x0 - self.star_vel[0]*dt
                     self.oiwfs_y0 = self.oiwfs_y0 - self.star_vel[1]*dt
 
-                    # Currently just hacking to see if starfield moves, so no
+                    # Hacking to see if starfield moves, so no
                     # probe movement.
                     #update = False
                     
@@ -1467,7 +1568,7 @@ class State(object):
                             print '   reconfig time:',self.move_time
                         self.move_time = 0
                         #print 'selected stars:', \
-                        #    [(p.star.x,p.star.y) for p in self.probes]
+                        #    [(s.x,s.y) for p in self.probes]
 
             # Hack: always draw stars second time this method is
             # called. Otherwise the first asterism will not be visible
@@ -1521,8 +1622,12 @@ class State(object):
                     continue
                 else:
                     self.p_ref.x,self.p_ref.y=(x,y)
+                    if self.p_ref.star:
+                        sTarg = self.p_ref.star
+                    else:
+                        sTarg = Star(self.p_ref.x_home,self.p_ref.y_home)
 
-                    ut,gradt = self.p_ref.u_target(self.p_ref.star.x,self.p_ref.star.y)
+                    ut,gradt = self.p_ref.u_target(sTarg.x,sTarg.y)
                     try:
                         uc_o1,gradc_o1,P_o1,junk = self.p_ref.u_collision(self.p_o1)
                         uc_o2,gradc_o2,P_o2,junk = self.p_ref.u_collision(self.p_o2)
