@@ -178,7 +178,7 @@ class Point(object):
 
 # Calculate the nearest point (and distance) on a line segment AB to a point C.
 # http://paulbourke.net/geometry/pointlineplane/
-def nearest_line_point(A,B,C):
+def nearest_linesegment_point(A,B,C):
     if (A.x == B.x) and (A.y == B.y):
         N = Point(A.x,A.y)
         d_sq = (C.x-A.x)**2 + (C.y-A.y)**2
@@ -207,6 +207,12 @@ def nearest_line_point(A,B,C):
             d_sq=(C.x-N.x)**2 + (C.y-N.y)**2
 
     return N, d_sq
+
+# Calculate the distance between a line (y = mx + b) and a point P
+# Modified from https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
+def dist_line_point(m,b,P):
+    d = np.abs(-m*P.x + P.y - b)/np.sqrt(m**2 + 1)
+    return d
 
 # a star
 class Star(Point):
@@ -379,8 +385,8 @@ class Probe(object):
         tip2 = Point(probe2.x, probe2.y)
         rh2 = probe2.r_head
 
-        N1, d_sq1 = nearest_line_point(origin,tip,tip2)
-        N2, d_sq2 = nearest_line_point(origin2,tip2,tip)
+        N1, d_sq1 = nearest_linesegment_point(origin,tip,tip2)
+        N2, d_sq2 = nearest_linesegment_point(origin2,tip2,tip)
 
         # Compensate for radius of probe head
         d_sq1 = d_sq1 - rh2**2
@@ -970,10 +976,46 @@ class State(object):
                 #print '  good'
 
 
-                # Configuration is valid. Calculate figure of merit:
-                # - minimize maximum probe extension
-                #merit = np.max(np.array([p.r for p in self.probes]))
-                merit = np.max(np.array([self.probes[i].r for i in probe_subset]))
+                # Configuration is valid. Calculate figure of merit.
+                if self.star_vel:
+                #if False:
+                    # For non-sidereal tracking we want to choose
+                    # stars that are closer to the direction from which
+                    # they are moving into the field of view.
+                    #
+                    # We first calculate the equation for a line that
+                    # is tangent to the FOV circle on the side from
+                    # which the stars are coming, perpendicular to the
+                    # velocity vector of those stars. We then calculate
+                    # the minimum distance of the stars to that line
+                    # to calculate the merit
+
+                    vx = self.star_vel[0]
+                    vy = self.star_vel[1]
+
+                    if vy == 0:
+                        # Stars are moving horizontally
+                        merit = np.max(np.abs(np.array([-np.sign(vx)*r_patrol-self.probes[i].x for i in probe_subset])))
+                    elif vx == 0:
+                        # Stars are moving vertically
+                        merit = np.max(np.abs(np.array([-np.sign(vy)*r_patrol-self.probes[i].y for i in probe_subset])))
+                    else:
+                        # Full solution. First solve for x, y values of the tangent
+                        # point to the circle along the line representing the
+                        # star velocity vector that goes through the origin
+                        xtan = -np.sign(vx)*np.sqrt(r_patrol**2 / ((vy/vx)**2+1))
+                        ytan = -np.sign(vy)*np.sqrt(r_patrol**2 / ((vx/vy)**2+1))
+
+                        # The tangent line has a slope orthogonal to velocity vector
+                        m = -vx/vy
+                        b = ytan - m*xtan
+
+                        merit = np.max(np.array([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
+                        
+                else:
+                    # otherwise we prefer configurations that minimize
+                    # the maximum probe extension
+                    merit = np.max(np.array([self.probes[i].r for i in probe_subset]))
 
                 configs.append({
                     'stars':test_stars,
