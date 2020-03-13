@@ -1426,6 +1426,8 @@ class State(object):
                                 p.set_cart(p.star.x,p.star.y)
                             except (ProbeLimitsException,ProbeCollision):
                                 # can't move here so stop tracking
+                                if p.star.catindex == 54:
+                                    print "Here"
                                 self.catalog_assigned[p.star.catindex] = False
                                 p.star = None
                                 p.trail_x = []
@@ -1436,7 +1438,10 @@ class State(object):
                                 print("Here",k)
                             
                             # revert position after test
-                            p.set_cart(old_x,old_y)
+                            try:
+                                p.set_cart(old_x,old_y)
+                            except:
+                                pass
 
 
                     #for j in range(len(self.stars)):
