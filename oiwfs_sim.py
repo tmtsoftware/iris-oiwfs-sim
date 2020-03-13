@@ -913,9 +913,9 @@ class State(object):
             # catalog (i.e., it should be consistent with probe_subset)
             all_stars = self.catalog_stars[catalog_subset]
             for i in range(len(catalog_subset)):
-                # Adjust for current OIWFS pointing
-                all_stars[i].x = all_stars[i].x - self.oiwfs_x0
-                all_stars[i].y = all_stars[i].y - self.oiwfs_y0
+                # Calculate rel position for current OIWFS pointing
+                all_stars[i].xrel = all_stars[i].x - self.oiwfs_x0
+                all_stars[i].yrel = all_stars[i].y - self.oiwfs_y0
                 # Include the catalog index
                 all_stars[i].catindex = catalog_subset[i]
 
@@ -932,8 +932,8 @@ class State(object):
             #for i in range(len(self.stars)):
             for i in range(len(test_stars)):
                 test_star_slot = test_star_slots[i]
-                self.stars[test_star_slot].x = test_stars[i].x
-                self.stars[test_star_slot].y = test_stars[i].y
+                self.stars[test_star_slot].x = test_stars[i].xrel
+                self.stars[test_star_slot].y = test_stars[i].yrel
             
             # Check all possible configurations for probes being configured
             for probe_index in itertools.permutations(probe_subset,len(probe_subset)):
@@ -1018,8 +1018,8 @@ class State(object):
             test_star_slot = test_star_slots[i]
             s = self.stars[test_star_slot]
             # Update star positions to best values
-            s.x = best_stars[i].x
-            s.y = best_stars[i].y
+            s.x = best_stars[i].xrel
+            s.y = best_stars[i].yrel
 
             # Record the catalog index of the star
             s.catindex = best_stars[i].catindex
