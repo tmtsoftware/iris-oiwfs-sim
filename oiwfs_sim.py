@@ -1227,8 +1227,8 @@ class State(object):
                     # the target and continue to next probe to make
                     # animation smoother
 
-                    old_x = s.x
-                    old_y = s.y
+                    old_x = p.x
+                    old_y = p.y
                     try:   
                         p.set_cart(s.x,s.y)
                     except (ProbeLimitsException,ProbeCollision):
@@ -1438,11 +1438,7 @@ class State(object):
                                 print("Here",k)
                             
                             # revert position after test
-                            try:
-                                p.set_cart(old_x,old_y)
-                            except:
-                                pass
-
+                            p.set_cart(old_x,old_y)
 
                     #for j in range(len(self.stars)):
                     #    s = self.stars[j]
