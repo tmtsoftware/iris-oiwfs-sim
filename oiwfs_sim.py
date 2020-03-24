@@ -1364,7 +1364,7 @@ class State(object):
                     # if pointing right at eachother
                     if p.r + p_nearest.r < d_clear:
                         print "Error: Don't know how to handle local minimum."
-                        sys.exit(1)
+                        #sys.exit(1)
 
                 dir = grad/norm
 
@@ -1469,63 +1469,36 @@ class State(object):
                         if p.star is None:
                             need_reconfig.append(k)
                         else:
-                            # try setting probe to current star position
-                            old_x = p.x
-                            old_y = p.y
+                            # If the star is no longer within the FOV we
+                            # need to reconfig
+                            reconfig = False
+                            this_star_dist = np.sqrt(p.x**2 + p.y**2)
+                            if this_star_dist > r_patrol:
+                                reconfig = True
+                            else:
+                                # try setting probe to current star position
+                                # and check for exceeding probe limits or
+                                # collisions
+                                old_x = p.x
+                                old_y = p.y
 
-                            try:
-                                p.set_cart(p.star.x,p.star.y)
-                            except (ProbeLimitsException,ProbeCollision):
-                                # can't move here so stop tracking
-                                if p.star.catindex == 54:
-                                    print "Here"
+                                try:
+                                    p.set_cart(p.star.x,p.star.y)
+                                except (ProbeLimitsException,ProbeCollision):
+                                    reconfig = True
+                                
+                                # revert position after test
+                                p.set_cart(old_x,old_y)
+
+                            if reconfig:
+                                # can't move here so stop tracking and flag
+                                # for reconfig
                                 self.catalog_assigned[p.star.catindex] = False
                                 p.star = None
                                 p.trail_x = []
                                 p.trail_y = []
-
-                                # flag as needing reconfig
                                 need_reconfig.append(k)
                                 print("Here",k)
-                            
-                            # revert position after test
-                            p.set_cart(old_x,old_y)
-
-                    #for j in range(len(self.stars)):
-                    #    s = self.stars[j]
-                    #    new = False
-                    #    if s.x is None or s.y is None:
-                    #        new = True
-                    #    elif np.sqrt(s.x**2 + s.y**2) > r_patrol:
-                    #        self.catalog_assigned[s.catindex] = False
-                    #        new = True
-                        
-                    #    if new:
-                            # Figure out which probe tracks this star and
-                            # flag
-                            #for p in self.probes:
-                    #        for k in range(len(self.probes)):
-                    #            p = self.probes[k]
-                    #            if p.star == s:
-                    #                need_reconfig.append(k)
-                                    # Reset the star trail for this probe
-                    #                p.trail_x = []
-                    #                p.trail_y = []
-
-
-                            # As an initial hack this just selects the first
-                            # stars that appear in the subset of the catalog
-                            # that lands in the patrol area
-                            #s.x = self.catalog_x[infield[j]] - self.oiwfs_x0
-                            #s.y = self.catalog_y[infield[j]] - self.oiwfs_y0
-                            #self.catalog_assigned[infield[j]] = True
-
-                    # Any probe not currently tracking a star is also flagged
-                    # for reconfiguration
-                    #for k in range(len(self.probes)):
-                    #    p = self.probes[k]
-                    #    if p.star is None:
-                    #        need_reconfig.append(k)
 
                     # Perform reconfigs
                     if need_reconfig:
