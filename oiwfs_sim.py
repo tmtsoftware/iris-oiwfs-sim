@@ -929,6 +929,15 @@ class State(object):
         old_probe_xy = [(p.x,p.y) for p in self.probes]
         old_star_xy = [(s.x,s.y) for s in self.stars]
 
+        # Set all probes to their star locations -- this is to facilitate
+        # configuration testing when only a subset are to be reconfigured
+        # since we care about the target config, not where probes are
+        # currently
+        for p in self.probes:
+            if p.star:
+                p.set_cart(p.star.x,p.star.y)
+
+
         configs = [] # list of valid configs, will contain merit for ranking
 
         # Iterate over all test star subsets in all_stars
