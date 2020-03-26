@@ -1472,8 +1472,9 @@ class State(object):
                         else:
                             # If the star is no longer within the FOV we
                             # need to reconfig
-                            
-                            this_star_dist = np.sqrt(p.x**2 + p.y**2)
+                            reconfig = False
+                            this_star_dist = np.sqrt(p.star.x**2 + p.star.y**2)
+
                             if this_star_dist > r_patrol:
                                 reconfig = True
                             else:
