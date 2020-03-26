@@ -1463,15 +1463,16 @@ class State(object):
                     # get flagged as needing reconfiguration.
                     # Also, any probe not currently tracking a star is also
                     # flagged.
-                    need_reconfig=[]
+                    need_reconfig=[]  # which probes need reconfig
                     for k in range(len(self.probes)):
+                        reconfig = False  # if current probe needs reconfig
                         p = self.probes[k]
                         if p.star is None:
-                            need_reconfig.append(k)
+                            reconfig = True
                         else:
                             # If the star is no longer within the FOV we
                             # need to reconfig
-                            reconfig = False
+                            
                             this_star_dist = np.sqrt(p.x**2 + p.y**2)
                             if this_star_dist > r_patrol:
                                 reconfig = True
@@ -1490,15 +1491,17 @@ class State(object):
                                 # revert position after test
                                 p.set_cart(old_x,old_y)
 
-                            if reconfig:
-                                # can't move here so stop tracking and flag
-                                # for reconfig
+                        if reconfig:
+                            if p.star is not None:
+                                # can't move here so stop tracking
                                 self.catalog_assigned[p.star.catindex] = False
                                 p.star = None
-                                p.trail_x = []
-                                p.trail_y = []
-                                need_reconfig.append(k)
-                                print("Here",k)
+                            
+                            # Reset trail and flag for reconfig
+                            p.trail_x = []
+                            p.trail_y = []
+                            need_reconfig.append(k)
+                            #print("Here",k)
 
                     # Perform reconfigs
                     if need_reconfig:
