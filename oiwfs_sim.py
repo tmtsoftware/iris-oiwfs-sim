@@ -75,6 +75,9 @@ grad_tol      = 0.1*0.5*beta*vmax*dt # target potential gradient 1/2 step away
                                  
 d_clear       = 2.*r_origin*np.cos(np.radians(30)) # total probe lengths clear
 
+d_limit = 10*r_patrol    # distance for merit calc if probe is in limit for configuration
+d_collided = 20*r_patrol # distance for merit calc if probe collides in configuration
+
 #print "Arrival tolerance (mm):",tol
 
 # max value of collision potential
@@ -349,6 +352,9 @@ class Probe(object):
 
         # Calculate the home/parked position
         self.x_home,self.y_home = self.pol2cart(r0,self.theta_home)
+
+        # Set if probe is parked/parking
+        self.park = False
 
     def set_cart(self, x, y):
         """ Set probe tips to new x, y location """
@@ -954,40 +960,46 @@ class State(object):
             for probe_index in itertools.permutations(probe_subset,len(probe_subset)):
                 #print 'config:', probe_index
 
-                # Test probe positions in this configuration
-                try:
-                    for i in range(len(probe_subset)):
+                probe_limits = []
+                probe_collisions = []
+                
+                # Test probes in this configuration
+                
+                for i in range(len(probe_subset)):
+                    try:
                         test_star_slot = test_star_slots[i]
                         s = self.stars[test_star_slot]
                         p = self.probes[probe_index[i]]
                         p.set_cart(s.x,s.y)
                         p.star = s
-                except ProbeLimitsException:
-                    # Configuration exceeds probe actuator limits
-                    #print "Exceed probe limits."
-                    continue
+                    except ProbeLimitsException:
+                        # Configuration exceeds probe actuator limits
+                        #print "Exceed probe limits."
+                        #continue
+                        probe_limits.append(i) # index into probe_subset
 
                 # Check for probe collisions (using minimum star distance as
                 # threshold) in this configuration. Note that we check all
                 # probes here, not just the subset being reconfigured.
-                collides = False
+                #collides = False
                 for i in itertools.combinations(range(3),2):
                     #print "check config: (%i,%i)" % (i[0], i[1])
                     this_d,a,b = self.probes[i[0]].dist(self.probes[i[1]])
                     #print '     this_d=',this_d
                     if this_d < r_star:
+                        probe_collisions.append([i[0],i[1]]) # absolute probe indices
                         #print '  bad'
-                        collides = True
-                        break
-                if collides:
+                        #collides = True
+                        #break
+                #if collides:
                     #print "collides"
-                    continue
+                #    continue
                 #print '  good'
 
-
-                # Configuration is valid. Calculate figure of merit.
+                # Calculate figure of merit.
+                d = None # used to calculate merit. Array of distance units for 
+                         # probes to be reconfigured
                 if self.star_vel:
-                #if False:
                     # For non-sidereal tracking we want to choose
                     # stars that are closer to the direction from which
                     # they are moving into the field of view.
@@ -995,19 +1007,28 @@ class State(object):
                     # We first calculate the equation for a line that
                     # is tangent to the FOV circle on the side from
                     # which the stars are coming, perpendicular to the
-                    # velocity vector of those stars. We then calculate
-                    # the minimum distance of the stars to that line
-                    # to calculate the merit
-
+                    # apparent velocity vector of those stars. We then calculate
+                    # the distance of the stars to that line.
+                    #
+                    # In the event that a probe exceeds its limits,
+                    # the merit is assigned a poor value, and
+                    # the probe in question is later parked.
+                    #
+                    # In the event of a collision, the merit is also
+                    # assigned a poor value. For the two probes involved in the collision,
+                    # the lower merit probe is parked.
+                    
                     vx = self.star_vel[0]
                     vy = self.star_vel[1]
 
                     if vy == 0:
                         # Stars are moving horizontally
-                        merit = np.max(np.abs(np.array([-np.sign(vx)*r_patrol-self.probes[i].x for i in probe_subset])))
+                        #merit = np.max(np.abs(np.array([-np.sign(vx)*r_patrol-self.probes[i].x for i in probe_subset])))
+                        d = np.abs(np.array([-np.sign(vx)*r_patrol-self.probes[i].x for i in probe_subset]))
                     elif vx == 0:
                         # Stars are moving vertically
-                        merit = np.max(np.abs(np.array([-np.sign(vy)*r_patrol-self.probes[i].y for i in probe_subset])))
+                        #merit = np.max(np.abs(np.array([-np.sign(vy)*r_patrol-self.probes[i].y for i in probe_subset])))
+                        d = np.abs(np.array([-np.sign(vy)*r_patrol-self.probes[i].y for i in probe_subset]))
                     else:
                         # Full solution. First solve for x, y values of the tangent
                         # point to the circle along the line representing the
@@ -1019,16 +1040,55 @@ class State(object):
                         m = -vx/vy
                         b = ytan - m*xtan
 
-                        merit = np.max(np.array([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
-                        
+                        #merit = np.max(np.array([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
+                        d = np.array(np.abs([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
+
+
+                    # set d to a large number if newly-configured probe in limit
+                    for i in probe_limits:
+                            d[i] = d_limit
+
+                    # set d of worst probe involved in collision to large number
+
+                    # first we need a mapping from absolute probe number to
+                    # probe index within the subset
+                    subset_map = [None]*3
+                    for i in range(len(probe_subset)):
+                        subset_map[probe_subset[i]] = i
+
+                    for c in probe_collisions:
+                        # Check if the first probe is in the reconfig subset
+                        if c[0] in probe_subset:
+                            # Check if the other probe is in the reconfig subset
+                            if c[1] in probe_subset:
+                                # Set the one with the larger d to a large number
+                                if d[subset_map[c[0]]] > d[subset_map[c[1]]]:
+                                    d[subset_map[c[0]]] = d_collided
+                                else:
+                                    d[subset_map[c[1]]] = d_collided
+                            else:
+                                # It isn't, so first probe large number
+                                d[subset_map[c[0]]] = d_collided 
+                        else:
+                            # It isn't so check if the second probe to be reconfiged
+                            if c[1] in probe_subset:
+                                # second probe large number
+                                d[subset_map[c[1]]] = d_collided
+                                
+
+                    # Merit is the sum of d (i.e., a bigger number is worse)
+                    merit = np.sum(d)
+
                 else:
                     # otherwise we prefer configurations that minimize
                     # the maximum probe extension
-                    merit = np.max(np.array([self.probes[i].r for i in probe_subset]))
+                    d = np.array([self.probes[i].r for i in probe_subset])
+                    merit = np.max(d)
 
                 configs.append({
                     'stars':test_stars,
                     'probes':probe_index,
+                    'd':d,
                     'merit':merit})
 
         # Return probes and stars to old settings
@@ -1049,39 +1109,58 @@ class State(object):
                 best = c['probes']
                 min_merit = c['merit']
                 best_stars = c['stars']
+                best_d = c['d']
             elif c['merit'] < min_merit:
                 min_merit = c['merit']
                 best = c['probes']
                 best_stars = c['stars']
+                best_d = c['d']
     
-        if best is None:
+        if best is not None:            
+            # Check the d array to see if the probes is to be parked
+            # because it would be in a limit, or collide with another probe
+            for i in range(len(probe_subset)):
+                if (best_d[i] == d_limit) or (best_d[i] == d_collided):
+                    p = self.probes[probe_subset[i]]
+                    p.park = True
+                    if p.star is not None:
+                        p.star.index = False
+                        p.star = None
+                else:
+                    p.park = False
+
+            # Now assign the best star coordinates to the appropriate slot.
+            for i in range(len(test_stars)):
+                p = self.probes[best[i]]
+                if p.park == False:
+                    # We may have flagged it to park above
+
+                    test_star_slot = test_star_slots[i]
+                    s = self.stars[test_star_slot]
+                    # Update star positions to best values
+                    s.x = best_stars[i].xrel
+                    s.y = best_stars[i].yrel
+
+                    # Record the catalog index of the star
+                    s.catindex = best_stars[i].catindex
+
+                    # Indicate that this catalog star is assigned
+                    self.catalog_assigned[s.catindex] = True
+
+                    # Update probes to include selected star references
+                    p.star = s
+        else:
             # Couldn't find a star + probe assignment configuration. So,
             # probes that were to be reconfigured are assigned None star
             for i in probe_subset:
                 p = self.probes[i]
+                p.park = True
                 if p.star is not None:
                     p.star.index = False
                     p.star = None
-
             return False
-
-        for i in range(len(test_stars)):
-            test_star_slot = test_star_slots[i]
-            s = self.stars[test_star_slot]
-            # Update star positions to best values
-            s.x = best_stars[i].xrel
-            s.y = best_stars[i].yrel
-
-            # Record the catalog index of the star
-            s.catindex = best_stars[i].catindex
-
-            # Indicate that this catalog star is assigned
-            self.catalog_assigned[s.catindex] = True
-
-            # Update probes to include selected star references
-            p = self.probes[best[i]]
-            p.star = s
-
+ 
+    
         # update which catalog stars assigned
         #if catalog_subset is not None:
         #    for s in best_stars:
