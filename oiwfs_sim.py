@@ -28,7 +28,7 @@ r_overshoot   = 20          # distance by which probes overshoot centre (mm)
 r_head        = 25/2.       # radius of probe head (mm)
 r_min         = r_patrol    # minimum extension of probes (mm)
 r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
-r0            = r_max-r_patrol # initial probe extension (mm)
+r0            = r_max-r_patrol # initial/parked probe extension (mm)
 maxstars      = 3     # maximum number of stars
 
 vmax = 13.2
@@ -950,10 +950,11 @@ class State(object):
 
         if len(all_stars) < len(test_star_slots):
             # If we don't have more stars than probes, we look
-            # at all the combinations. So we probably need an
-            # outer loop over subset of probes length N where N
-            # is the available number of stars
-            print 'not enough stars for probes'
+            # at all the combinations. So, we add in some None stars
+            # so that we have at least enough for the number of probes,
+            # and any probe assigned None will have to be parked.
+            nExtra = len(test_star_slots)-len(all_stars)
+            all_stars = np.append(all_stars,[None]*nExtra)
 
         for test_stars in itertools.combinations(all_stars,len(test_star_slots)):
 
@@ -961,9 +962,14 @@ class State(object):
             #for i in range(len(self.stars)):
             for i in range(len(test_stars)):
                 test_star_slot = test_star_slots[i]
-                self.stars[test_star_slot].x = test_stars[i].xrel
-                self.stars[test_star_slot].y = test_stars[i].yrel
-            
+                if test_stars[i] is not None:
+                    self.stars[test_star_slot].x = test_stars[i].xrel
+                    self.stars[test_star_slot].y = test_stars[i].yrel
+                else:
+                    # No star for this slot
+                    self.stars[test_star_slot].x = None
+                    self.stars[test_star_slot].y = None
+                    
             # Check all possible configurations for probes being configured
             for probe_index in itertools.permutations(probe_subset,len(probe_subset)):
                 #print 'config:', probe_index
@@ -978,8 +984,13 @@ class State(object):
                         test_star_slot = test_star_slots[i]
                         s = self.stars[test_star_slot]
                         p = self.probes[probe_index[i]]
-                        p.set_cart(s.x,s.y)
-                        p.star = s
+                        if s.x is not None:
+                            p.set_cart(s.x,s.y)
+                            p.star = s
+                        else:
+                            # Park this probe
+                            p.set_cart(p.x_home,p.y_home)
+                            p.star = None
                     except ProbeLimitsException:
                         # Configuration exceeds probe actuator limits
                         #print "Exceed probe limits."
@@ -1051,6 +1062,12 @@ class State(object):
                         #merit = np.max(np.array([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
                         d = np.array(np.abs([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
 
+                    # Fix up d for any probe that is parked
+                    # Haven't tested yet
+                    #for i in range(len(probe_subset)):
+                    #    p = self.probes[probe_subset[i]]
+                    #    if p.star is None:
+                    #        d[i] = 0
 
                     # set d to a large number if newly-configured probe in limit
                     for i in probe_limits:
@@ -1130,11 +1147,13 @@ class State(object):
             for i in range(len(probe_subset)):
                 p = self.probes[best[i]] #[probe_subset[i]]
                 if (best_d[i] == d_limit) or (best_d[i] == d_collided):
+                    # Park because limit or collided
                     p.park = True
                     if p.star is not None:
                         p.star.index = False
                         p.star = None
                 else:
+                    # Assigned to star
                     p.park = False
 
             # Now assign the best star coordinates to the appropriate slot.
@@ -1145,18 +1164,24 @@ class State(object):
 
                     test_star_slot = test_star_slots[i]
                     s = self.stars[test_star_slot]
-                    # Update star positions to best values
-                    s.x = best_stars[i].xrel
-                    s.y = best_stars[i].yrel
+                    
+                    if best_stars[i] is None:
+                        # this probe will actually be parked
+                        p.park = True
+                        p.star = None
+                    else:
+                        # Update star positions to best values
+                        s.x = best_stars[i].xrel
+                        s.y = best_stars[i].yrel
 
-                    # Record the catalog index of the star
-                    s.catindex = best_stars[i].catindex
+                        # Record the catalog index of the star
+                        s.catindex = best_stars[i].catindex
 
-                    # Indicate that this catalog star is assigned
-                    self.catalog_assigned[s.catindex] = True
+                        # Indicate that this catalog star is assigned
+                        self.catalog_assigned[s.catindex] = True
 
-                    # Update probes to include selected star references
-                    p.star = s
+                        # Update probes to include selected star references
+                        p.star = s
         else:
             # Couldn't find a star + probe assignment configuration. So,
             # probes that were to be reconfigured are assigned None star
