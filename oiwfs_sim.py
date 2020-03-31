@@ -1117,11 +1117,11 @@ class State(object):
                 best_d = c['d']
     
         if best is not None:            
-            # Check the d array to see if the probes is to be parked
+            # Check the d array to see if the probe is to be parked
             # because it would be in a limit, or collide with another probe
             for i in range(len(probe_subset)):
+                p = self.probes[best[i]] #[probe_subset[i]]
                 if (best_d[i] == d_limit) or (best_d[i] == d_collided):
-                    p = self.probes[probe_subset[i]]
                     p.park = True
                     if p.star is not None:
                         p.star.index = False
