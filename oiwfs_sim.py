@@ -947,6 +947,14 @@ class State(object):
         configs = [] # list of valid configs, will contain merit for ranking
 
         # Iterate over all test star subsets in all_stars
+
+        if len(all_stars) < len(test_star_slots):
+            # If we don't have more stars than probes, we look
+            # at all the combinations. So we probably need an
+            # outer loop over subset of probes length N where N
+            # is the available number of stars
+            print 'not enough stars for probes'
+
         for test_stars in itertools.combinations(all_stars,len(test_star_slots)):
 
             # Set star positions to test values
@@ -1104,7 +1112,7 @@ class State(object):
 
         for c in configs:
             # Loop over possible probe configurations
-            print c
+            #print c
             if best is None:
                 best = c['probes']
                 min_merit = c['merit']
@@ -1173,7 +1181,7 @@ class State(object):
             else:
                 sTarg = p.star
 
-            print 'Select Probe',i,':',p.x,p.y,sTarg.x,sTarg.y
+            #print 'Select Probe',i,':',p.x,p.y,sTarg.x,sTarg.y
 
         return True
 
