@@ -30,6 +30,7 @@ r_min         = r_patrol    # minimum extension of probes (mm)
 r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
 r0            = r_max-r_patrol # initial/parked probe extension (mm)
 maxstars      = 3     # maximum number of stars
+r_ifu         = 20    # radius of region to avoid for IFU (mm)
 
 vmax = 13.2
 vr_max        = vmax #vmax/np.sqrt(2)
@@ -233,11 +234,15 @@ class Star(Point):
         self.symbol.set_data([self.x], [self.y])
 
 # Exception class for probe actuators at limits
-class ProbeLimitsException(Exception):
+class ProbeLimits(Exception):
     pass
 
 # Exception class for collision
 class ProbeCollision(Exception):
+    pass
+
+# Exception class for probe vignetting IFU
+class ProbeVignetteIFU(Exception):
     pass
 
 # Calculate acceleration along axis to reach target
@@ -514,7 +519,7 @@ class Probe(object):
 
         if out_of_range:
             self.x, self.y = self.pol2cart(self.r, self.theta)
-            raise ProbeLimitsException(errstr)
+            raise ProbeLimits(errstr)
 
     def move(self):
         """ Perform one step of the motion integration """
@@ -622,6 +627,49 @@ class Probe(object):
                 grad = np.array([du_dx,du_dy])
 
         return u, grad, A, B
+
+    def u_ifu(self):
+        """ Evaluate the potential,gradient for probe WRT IFU pickoff region"""
+
+        # distance of probe from centre of FOV
+        r_sq = self.x**2 + self.y**2
+        r = np.sqrt(r_sq)
+
+        # The distance from the probe to the pickoff region needs
+        # to account for the size of the prob head and the size of the
+        # region
+        d = r - (r_head + r_ifu)
+        if d <= 0:
+            raise ProbeVignetteIFU("Probe vignettes IFU! (%f,%f)" % \
+                                    (self.x,self.y))
+        else:
+            # Use the same collision potential function
+            if d < col_min:
+                # We're very close, clipped potential
+                u = u_col_max
+            else:
+                if d < tol_avoid:
+                    u = 0.5*alpha*(1/d - 1/tol_avoid)**2
+                else:
+                    u = 0
+
+            # Direction (points towards probe from centre)
+            vect = np.array([self.x,self.y])
+            norm = np.linalg.norm(vect)
+            if norm <= 0:
+                raise ProbeVignetteIFU("Invalid norm detected")
+            dir = vect/norm
+
+            # Gradient
+            if d < tol_avoid:
+                grad_mag = alpha*(1/d - 1/tol_avoid)*1/d**2
+                grad = grad_mag*dir
+            else:
+                du_dx = 0
+                du_dy = 0
+                grad = np.array([du_dx,du_dy])
+
+        return u, grad
 
     def grad_pol(self, grad):
         """ Convert cartesian gradient (force) in polar given point"""
@@ -775,8 +823,14 @@ class State(object):
                                        xlim=all_x0,
                                        ylim=all_y0,
                                        aspect='equal')
+
+        # patrol area
         circle=plt.Circle((0,0),r_patrol,color='k',fill=False)
         self.fig.gca().add_artist(circle)
+
+        # IFU pickoff
+        circle_ifu=plt.Circle((0,0),r_ifu,color='g',fill=False)
+        self.fig.gca().add_artist(circle_ifu)
 
         # arcs showing patrol regions for each probe
         theta_region = np.linspace(-theta_max,theta_max,num=50,endpoint=True)
@@ -976,9 +1030,9 @@ class State(object):
 
                 probe_limits = []
                 probe_collisions = []
+                probe_vignette = []
                 
                 # Test probes in this configuration
-                
                 for i in range(len(probe_subset)):
                     try:
                         test_star_slot = test_star_slots[i]
@@ -986,16 +1040,19 @@ class State(object):
                         p = self.probes[probe_index[i]]
                         if s.x is not None:
                             p.set_cart(s.x,s.y)
+                            p.u_ifu()
                             p.star = s
                         else:
                             # Park this probe
                             p.set_cart(p.x_home,p.y_home)
                             p.star = None
-                    except ProbeLimitsException:
+                    except ProbeLimits:
                         # Configuration exceeds probe actuator limits
                         #print "Exceed probe limits."
                         #continue
                         probe_limits.append(i) # index into probe_subset
+                    except ProbeVignetteIFU:
+                        probe_vignette.append(i)
 
                 # Check for probe collisions (using minimum star distance as
                 # threshold) in this configuration. Note that we check all
@@ -1071,7 +1128,11 @@ class State(object):
 
                     # set d to a large number if newly-configured probe in limit
                     for i in probe_limits:
-                            d[i] = d_limit
+                        d[i] = d_limit
+
+                    # set d to a large number of probe vignettes IFU pickoff
+                    for i in probe_vignette:
+                        d[i] = d_collided # just reuse value
 
                     # set d of worst probe involved in collision to large number
 
@@ -1345,6 +1406,12 @@ class State(object):
             probe_gradients[j]['grad_col'] = probe_gradients[j]['grad_col'] + \
                                              grad_j
 
+        # Repulsion due to IFU pickoff
+        for i in range(3):
+            probe = self.probes[i]
+            u,grad = probe.u_ifu()
+            probe_gradients[i]['grad_ifu'] = grad
+
         # Now do the attractive potentials
         # If a probe isn't currently assigned to a star, point it toward its
         # home position
@@ -1394,7 +1461,7 @@ class State(object):
                     old_y = p.y
                     try:   
                         p.set_cart(s.x,s.y)
-                    except (ProbeLimitsException,ProbeCollision):
+                    except (ProbeLimits,ProbeCollision,ProbeVignetteIFU):
                         # Can't go here so just revert the move for now. The invalid
                         # target star will be caught elsewhere and trigger a reconfig
                         p.set_cart(old_x,old_y)
@@ -1421,6 +1488,7 @@ class State(object):
                 # Otherwise figure out velocities from gradient
                 grad_cart = probe_gradients[i]['grad_col'] + \
                             probe_gradients[i]['grad_tran'] + \
+                            probe_gradients[i]['grad_ifu'] + \
                             probe_gradients[i]['grad_targ']
 
             grad = p.grad_pol(grad_cart)
@@ -1519,7 +1587,7 @@ class State(object):
             p.moving = 'moving'
             try:
                 p.move()
-            except ProbeLimitsException:
+            except ProbeLimits:
                 # Asterism should be OK so let actuators hit the rails
                 continue
 
@@ -1559,6 +1627,19 @@ class State(object):
                 if self.catalog:
                     # We're crab-walking through a catalog                
                     
+                    # Move the visible stars. We do this first to ensure
+                    # that we're checking stars are at valid positions
+                    # before deciding on reconfigs
+                    for s in self.stars:
+                        if s.x is not None and s.y is not None:
+                            s.x = s.x + self.star_vel[0]*dt
+                            s.y = s.y + self.star_vel[1]*dt
+
+                    # The OIWFS pointing moves in the opposite sense of star_vel
+                    self.oiwfs_x0 = self.oiwfs_x0 - self.star_vel[0]*dt
+                    self.oiwfs_y0 = self.oiwfs_y0 - self.star_vel[1]*dt
+
+
                     # Which stars are in the OIWFS patrol area
                     star_dist = np.sqrt((self.catalog_x - self.oiwfs_x0)**2 + \
                         (self.catalog_y - self.oiwfs_y0)**2)
@@ -1592,17 +1673,26 @@ class State(object):
                             else:
                                 # try setting probe to current star position
                                 # and check for exceeding probe limits or
-                                # collisions
+                                # collisions, or vignetting the IFU
                                 old_x = p.x
                                 old_y = p.y
 
                                 try:
                                     p.set_cart(p.star.x,p.star.y)
-                                except (ProbeLimitsException,ProbeCollision):
+                                    p.u_ifu()
+                                except ProbeLimits:
+                                    reconfig = True
+                                except ProbeCollision:
+                                    reconfig = True
+                                except ProbeVignetteIFU:
                                     reconfig = True
                                 
                                 # revert position after test
-                                p.set_cart(old_x,old_y)
+                                try:
+                                    p.set_cart(old_x,old_y)
+                                except ProbeLimits:
+                                    # hack
+                                    continue
 
                         if reconfig:
                             if p.star is not None:
@@ -1624,16 +1714,7 @@ class State(object):
                         #    print("Could not reconfig probes")
                         #    sys.exit(1)
 
-                    # Move the visible stars
-                    for s in self.stars:
-                        if s.x is not None and s.y is not None:
-                            s.x = s.x + self.star_vel[0]*dt
-                            s.y = s.y + self.star_vel[1]*dt
-
-                    # The OIWFS pointing moves in the opposite sense of star_vel
-                    self.oiwfs_x0 = self.oiwfs_x0 - self.star_vel[0]*dt
-                    self.oiwfs_y0 = self.oiwfs_y0 - self.star_vel[1]*dt
-
+                    
                     # Hacking to see if starfield moves, so no
                     # probe movement.
                     #update = False
@@ -2110,8 +2191,9 @@ def run_sim(animate='cont',             # one of 'cont','track',None
 #   - if autoselect set, instead assign probes to supplied stars automatically
 #   - if the probe assignment is invalid, an exception will be thrown
 #     by the Probe.set_cart() calls:
-#     o ProbeLimitsException() if it is not within the Probe's patrol range
-#     o ProbeCollision()       if it would collide with another probe
+#     o ProbeLimits()       if it is not within the Probe's patrol range
+#     o ProbeCollision()    if it would collide with another probe
+#     o ProbeVignetteIFU()  if it would vignette the IFU pickoff
 def oiwfs_sky(pointing,         # [ra,dec,PA] in degrees
               stars,            # [[ra,dec],[ra,dec],[ra,dec] in degrees
               autoselect=False  # automatically select stars if True
