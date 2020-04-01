@@ -50,6 +50,7 @@ tol_avoid     = r_star #100    # repulsive potential range (approaches 0 beyond)
 tol_attract   = 5      # attractive potential range (quadratic->conic)
 alpha         = 10.    # strength of collision avoidance potential
 beta          = 0.001  # strength of target attraction potential
+gamma         = 10.    # strength of IFU avoidance potential
 
 col_min       = 0.1    # closer to collision than this and we clip col potential
 vt_tol_deg    = 0.5    # what rotator velocity is stopped? (deg/s)
@@ -643,13 +644,13 @@ class Probe(object):
             raise ProbeVignetteIFU("Probe vignettes IFU! (%f,%f)" % \
                                     (self.x,self.y))
         else:
-            # Use the same collision potential function
+            # Use the same collision kind of potential function
             if d < col_min:
                 # We're very close, clipped potential
                 u = u_col_max
             else:
                 if d < tol_avoid:
-                    u = 0.5*alpha*(1/d - 1/tol_avoid)**2
+                    u = 0.5*gamma*(1/d - 1/tol_avoid)**2
                 else:
                     u = 0
 
@@ -1585,10 +1586,13 @@ class State(object):
 
             # Try moving the probes
             p.moving = 'moving'
+            #old_x = p.x
+            #old_y = p.y
             try:
                 p.move()
             except ProbeLimits:
-                # Asterism should be OK so let actuators hit the rails
+                # Can't go here so stay at old position
+                #p.set_cart(old_x,old_y)
                 continue
 
             # Update probe trails
