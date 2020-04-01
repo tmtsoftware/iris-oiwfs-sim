@@ -830,7 +830,7 @@ class State(object):
         self.fig.gca().add_artist(circle)
 
         # IFU pickoff
-        circle_ifu=plt.Circle((0,0),r_ifu,color='g',fill=False)
+        circle_ifu=plt.Circle((0,0),r_ifu,color='gray',fill=False)
         self.fig.gca().add_artist(circle_ifu)
 
         # arcs showing patrol regions for each probe
@@ -1838,6 +1838,7 @@ class State(object):
         y_grid = []
         ut_grid = []
         uc_grid = []
+        ui_grid = []
         old_x,old_y = [self.p_ref.x,self.p_ref.y]
         for i in range(len(samples)):
             for j in range(len(samples)):
@@ -1853,7 +1854,10 @@ class State(object):
                     else:
                         sTarg = Star(self.p_ref.x_home,self.p_ref.y_home)
 
+                    # Attractive potential
                     ut,gradt = self.p_ref.u_target(sTarg.x,sTarg.y)
+
+                    # Collision potentials
                     try:
                         uc_o1,gradc_o1,P_o1,junk = self.p_ref.u_collision(self.p_o1)
                         uc_o2,gradc_o2,P_o2,junk = self.p_ref.u_collision(self.p_o2)
@@ -1861,8 +1865,15 @@ class State(object):
                     except:
                         uc_o = u_col_max
 
+                    # IFU potential
+                    try:
+                        ui,gradi = self.p_ref.u_ifu()
+                    except:
+                        ui = u_col_max
+
                     ut_grid.append(ut)
                     uc_grid.append(uc_o)
+                    ui_grid.append(ui)
                     x_grid.append(x)
                     y_grid.append(y)
 
@@ -1873,12 +1884,14 @@ class State(object):
         else:
             l = np.logspace(-1.5,0,30,endpoint=True)
 
-        u_grid = np.array(uc_grid)+np.array(ut_grid)
+        u_grid = np.array(uc_grid)+np.array(ut_grid)+np.array(ui_grid)
 
         if 'rep' in self.contours:
             cc = plt.tricontour(x_grid,y_grid,uc_grid,colors='r',levels=l)
         if 'att' in self.contours:
             ct = plt.tricontour(x_grid,y_grid,ut_grid,colors='g',levels=l)
+        if 'ifu' in self.contours:
+            ci = plt.tricontour(x_grid,y_grid,ui_grid,colors='b',levels=l)
         if 'tot' in self.contours:
             c = plt.tricontour(x_grid,y_grid,u_grid,colors='k',levels=l)
 
@@ -2016,7 +2029,7 @@ class MencoderFileWriter(animation.FileMovieWriter, MencoderBase):
 
 def run_sim(animate='cont',             # one of 'cont','track',None
             dwell=200,                  # Dwell time
-            contours=None,              # list of ['att','rep','tot']
+            contours=None,              # list of ['att','rep','ifu','tot']
             levels=None,                # levels for contours
             contour_steps=1,            # spatial resolution in mm
             vectors=None,               # list of ['att','rep','tran']
@@ -2254,12 +2267,13 @@ def oiwfs_sky(pointing,         # [ra,dec,PA] in degrees
 if __name__ == '__main__':
 
     # Point OIWFS at a position on the sky.
-    oiwfs_sky([180.,1,10],
-              np.array([[180. + 0    ,1. + 0.006],
-                        [180. + 0.012,1. - 0.006],
-                        [180. - 0.012,1. - 0.006]]),
-              autoselect=False)
-    # sys.exit(1)
+    if False:
+        oiwfs_sky([180.,1,10],
+                np.array([[180. + 0    ,1. + 0.006],
+                            [180. + 0.012,1. - 0.006],
+                            [180. - 0.012,1. - 0.006]]),
+                autoselect=False)
+        # sys.exit(1)
 
     # animate a sequence of random reconfigurations, show on-screen
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1)
@@ -2287,18 +2301,20 @@ if __name__ == '__main__':
 
 
     # animated non-sidereal tracking scrolling through catalog, show on-screen
-    run_sim(animate='cont',display=True,dwell=0,frameskip=1,
-            plotlim=[-150,150,-150,150], star_vel=[-2,0],
-            catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
-            #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
+    if True:
+        run_sim(animate='cont',display=True,dwell=0,frameskip=1,
+                plotlim=[-150,150,-150,150], star_vel=[-2,0],
+                catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
+                #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
 
     # --- Series of figures for SPIE paper --------------------------------
     #figtype = 'pdf'
     figtype = 'png'
 
     # overview plot
-    run_sim(animate=None,aster=aster_easy,aster_select=True,
-            aster_start=8,figsize=(5.5,5),dpi=150,fname='model.'+figtype)
+    if False:
+        run_sim(animate=None,aster=aster_easy,aster_select=True,
+                aster_start=8,figsize=(5.5,5),dpi=150,fname='model.'+figtype)
 
     # show contours for normal situation
     plotlim=[-150,150,-150,150]
@@ -2307,69 +2323,76 @@ if __name__ == '__main__':
     levels = np.logspace(-1.8,0.2,40,endpoint=True)
     aster = [[ (-65,7), (-35,-15), (70,0) ]]
     startpos={'1':[-100,50]}
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='attract.'+figtype,plotlim=plotlim,
-            i_ref=1, contours=['att'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='components.'+figtype,plotlim=plotlim,
-            i_ref=1, contours=['att','rep'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='attract.'+figtype,plotlim=plotlim,
+                i_ref=1, contours=['att'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='total.'+figtype,plotlim=plotlim,
-            i_ref=1, contours=['tot'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='components.'+figtype,plotlim=plotlim,
+                i_ref=1, contours=['att','rep','ifu'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps)
 
-    # contours when there is a local minimum
-    aster = [[ (0,50), (10,-65), (-35,-105) ]]
-    startpos={'2':[-18,-20]}
-    plotlim=[-90,40,-140,10]
-    #contour_steps = 1
-    levels = np.logspace(-3,0.0,60,endpoint=True)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='total.'+figtype,plotlim=plotlim,
+                i_ref=1, contours=['tot'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps)
 
-    annotations = [ ('Rectangle',
-                     {'args': [(-28,-41),30,12],
-                      'kargs': {'angle': -20,
-                                'color': 'm',
-                                'fill' : False}})
-                ]
+        # contours when there is a local minimum
+        aster = [[ (0,50), (10,-65), (-35,-105) ]]
+        startpos={'2':[-18,-20]}
+        plotlim=[-90,40,-140,10]
+        #contour_steps = 1
+        levels = np.logspace(-3,0.0,60,endpoint=True)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='localmin.'+figtype,
-            i_ref=2, contours=['tot'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps,
-            plotlim=plotlim,title_str='(a) Scalar Potential',
-            annotations=annotations)
+        annotations = [ ('Rectangle',
+                        {'args': [(-28,-41),30,12],
+                        'kargs': {'angle': -20,
+                                    'color': 'm',
+                                    'fill' : False}})
+                    ]
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='localmin.'+figtype,
+                i_ref=2, contours=['tot'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps,
+                plotlim=plotlim,title_str='(a) Scalar Potential',
+                annotations=annotations)
 
     # vector field plots
     #contour_steps=1
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='vect_basic.'+figtype,
-            i_ref=2, vectors=['att','rep'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps,
-            plotlim=plotlim, title_str='(b) Gradient Field',
-            annotations=annotations)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='vect_basic.'+figtype,
+                i_ref=2, vectors=['att','rep'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps,
+                plotlim=plotlim, title_str='(b) Gradient Field',
+                annotations=annotations)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='vect_tran.'+figtype,
-            i_ref=2, vectors=['tran'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps,
-            plotlim=plotlim, title_str='(c) Transverse Component',
-            annotations=annotations)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='vect_tran.'+figtype,
+                i_ref=2, vectors=['tran'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps,
+                plotlim=plotlim, title_str='(c) Transverse Component',
+                annotations=annotations)
+    
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='vect_tot.'+figtype,
+                i_ref=2, vectors=['att','rep','tran'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps,
+                plotlim=plotlim, title_str='(d) Total Vector Field',
+                annotations=annotations)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='vect_tot.'+figtype,
-            i_ref=2, vectors=['att','rep','tran'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps,
-            plotlim=plotlim, title_str='(d) Total Vector Field',
-            annotations=annotations)
-
-
-    # Show some re-configurations
-    plotlim=[-150,150,-150,150]
-    for i in range(4):
-        run_sim(animate='track',aster=aster_seq,aster_select=True,
-                aster_start=i,fname='reconfig%i.%s' % (i,figtype),
-                plotlim=plotlim)
+    if False:
+        # Show some re-configurations
+        plotlim=[-150,150,-150,150]
+        for i in range(4):
+            run_sim(animate='track',aster=aster_seq,aster_select=True,
+                    aster_start=i,fname='reconfig%i.%s' % (i,figtype),
+                    plotlim=plotlim)
