@@ -30,7 +30,7 @@ r_min         = r_patrol    # minimum extension of probes (mm)
 r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
 r0            = r_max-r_patrol # initial/parked probe extension (mm)
 maxstars      = 3     # maximum number of stars
-r_ifu         = 20    # radius of region to avoid for IFU (mm)
+r_ifu         = 6.3*platescale # radius of region to avoid for IFU (mm)
 
 vmax = 13.2
 vr_max        = vmax #vmax/np.sqrt(2)
@@ -310,6 +310,15 @@ def max_vel(dir):
     #print "Vel cal:",dir,speed
 
     return dir*speed
+
+# Unwind an angle so that it is in the range -Pi, +Pi
+def unwind(theta):
+    if theta > np.pi:
+        return theta-2*np.pi
+    elif theta < -np.pi:
+        return theta+2*np.pi
+    else:
+        return theta
 
 # --- class Probe --------------------------------------------------------------
 
@@ -1412,6 +1421,59 @@ class State(object):
             probe = self.probes[i]
             u,grad = probe.u_ifu()
             probe_gradients[i]['grad_ifu'] = grad
+
+            # Need a transverse component if moving the probe to its target
+            # would pass beyond the centre of the FOV
+            if self.use_tran and probe.star:
+                # Create a test probe with its origin at the current position
+                # of our probe.
+                pt = Probe(probe.x, probe.y, 0, 0, r_head=0)
+                
+                # Point the test probe at the origin of the real probe, the
+                # and the target star, and compare with the angle of the IFU
+                # (at the centre of the IFU). The the first two are on different
+                # sides of the IFU we will need a transverse component
+                
+                dist_origin,theta_origin=pt.cart2pol(probe.x0,probe.y0)
+                dist_targ,theta_targ=pt.cart2pol(probe.star.x,probe.star.y)
+                dist_ifu,theta_ifu=pt.cart2pol(0,0)
+
+                if (np.sign(unwind(theta_origin-theta_ifu)) != np.sign(unwind(theta_targ-theta_ifu))) and (dist_targ > dist_ifu):
+                    # Is the target a counter-clockwise (positive) or clockwise (negative)
+                    # rotation about the probe's origin? This lets us choose the correct
+                    # vector orthogonal to the repulsive gradient caused by the IFU.
+
+                    current_theta = probe.theta
+                    targ_r,targ_theta = probe.cart2pol(probe.star.x,probe.star.y)
+
+                    thetas = np.unwrap([current_theta,targ_theta])
+                    if thetas[1] > thetas[0]:
+                        # counter-clockwise
+                        grad_tran=np.array([grad[1],-grad[0]])
+                    else:
+                        # clockwise
+                        grad_tran=np.array([-grad[1],grad[0]])
+
+                    norm = np.linalg.norm(grad_tran)
+                    if norm < 0:
+                        raise ProbeVignetteIFU("Invalid norm target vector.")
+                    elif norm == 0:
+                        grad_tran = grad_tran * 0
+                    else:
+                        grad_tran = grad_tran/norm
+
+                    norm = self.tran_scale*np.linalg.norm(grad)
+                    if norm < 0:
+                        raise ProbeVignetteIFU("Invalid norm grad vector")
+
+                    if info:
+                        print a, b, np.degrees(thetas), \
+                            grad, grad_tran
+
+                    # Same magnitude as repulsive potential
+                    grad_tran = norm*grad_tran
+
+                    probe_gradients[i]['grad_ifu'] = probe_gradients[i]['grad_ifu'] + grad_tran
 
         # Now do the attractive potentials
         # If a probe isn't currently assigned to a star, point it toward its
