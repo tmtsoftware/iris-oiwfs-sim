@@ -1010,8 +1010,6 @@ class State(object):
 
         configs = [] # list of valid configs, will contain merit for ranking
 
-        # Iterate over all test star subsets in all_stars
-
         if len(all_stars) < len(test_star_slots):
             # If we don't have more stars than probes, we look
             # at all the combinations. So, we add in some None stars
@@ -1020,20 +1018,30 @@ class State(object):
             nExtra = len(test_star_slots)-len(all_stars)
             all_stars = np.append(all_stars,[None]*nExtra)
 
+        # mapping from absolute probe number to
+        # index within the probe subset
+        subset_map = [None]*3
+        for i in range(len(probe_subset)):
+            subset_map[probe_subset[i]] = i
+
+        # Iterate over all test star subsets in all_stars
         for test_stars in itertools.combinations(all_stars,len(test_star_slots)):
 
             # Set star positions to test values
             #for i in range(len(self.stars)):
             for i in range(len(test_stars)):
                 test_star_slot = test_star_slots[i]
+
                 if test_stars[i] is not None:
                     self.stars[test_star_slot].x = test_stars[i].xrel
                     self.stars[test_star_slot].y = test_stars[i].yrel
+                    if test_stars[i].catindex == 40:
+                        pass
                 else:
                     # No star for this slot
                     self.stars[test_star_slot].x = None
                     self.stars[test_star_slot].y = None
-                    
+            
             # Check all possible configurations for probes being configured
             for probe_index in itertools.permutations(probe_subset,len(probe_subset)):
                 #print 'config:', probe_index
@@ -1043,12 +1051,14 @@ class State(object):
                 probe_vignette = []
                 
                 # Test probes in this configuration
-                for i in range(len(probe_subset)):
+                for i in range(len(probe_index)):
                     try:
                         test_star_slot = test_star_slots[i]
                         s = self.stars[test_star_slot]
                         p = self.probes[probe_index[i]]
                         if s.x is not None:
+                            if (probe_index[i]==1) and (s.catindex==64):
+                                pass
                             p.set_cart(s.x,s.y)
                             p.u_ifu()
                             p.star = s
@@ -1060,9 +1070,9 @@ class State(object):
                         # Configuration exceeds probe actuator limits
                         #print "Exceed probe limits."
                         #continue
-                        probe_limits.append(i) # index into probe_subset
+                        probe_limits.append(probe_index[i])
                     except ProbeVignetteIFU:
-                        probe_vignette.append(i)
+                        probe_vignette.append(probe_index[i])
 
                 # Check for probe collisions (using minimum star distance as
                 # threshold) in this configuration. Note that we check all
@@ -1084,7 +1094,7 @@ class State(object):
 
                 # Calculate figure of merit.
                 d = None # used to calculate merit. Array of distance units for 
-                         # probes to be reconfigured
+                         # probes to be reconfigured (same order as probe_subset)
                 if self.star_vel:
                     # For non-sidereal tracking we want to choose
                     # stars that are closer to the direction from which
@@ -1129,29 +1139,15 @@ class State(object):
                         #merit = np.max(np.array([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
                         d = np.array(np.abs([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
 
-                    # Fix up d for any probe that is parked
-                    # Haven't tested yet
-                    #for i in range(len(probe_subset)):
-                    #    p = self.probes[probe_subset[i]]
-                    #    if p.star is None:
-                    #        d[i] = 0
-
                     # set d to a large number if newly-configured probe in limit
                     for i in probe_limits:
-                        d[i] = d_limit
+                        d[subset_map[i]] = d_limit
 
                     # set d to a large number of probe vignettes IFU pickoff
                     for i in probe_vignette:
-                        d[i] = d_collided # just reuse value
-
+                        d[subset_map[i]] = d_collided # just reuse value
+                    
                     # set d of worst probe involved in collision to large number
-
-                    # first we need a mapping from absolute probe number to
-                    # probe index within the subset
-                    subset_map = [None]*3
-                    for i in range(len(probe_subset)):
-                        subset_map[probe_subset[i]] = i
-
                     for c in probe_collisions:
                         # Check if the first probe is in the reconfig subset
                         if c[0] in probe_subset:
@@ -1217,7 +1213,7 @@ class State(object):
             # because it would be in a limit, or collide with another probe
             for i in range(len(probe_subset)):
                 p = self.probes[best[i]] #[probe_subset[i]]
-                if (best_d[i] == d_limit) or (best_d[i] == d_collided):
+                if (best_d[subset_map[best[i]]] == d_limit) or (best_d[subset_map[best[i]]] == d_collided):
                     # Park because limit or collided
                     p.park = True
                     if p.star is not None:
@@ -1274,10 +1270,11 @@ class State(object):
             p = self.probes[i]
             if p.star is None:
                 sTarg = Star(p.x_home,p.y_home)
+                sTarg.catindex = None
             else:
                 sTarg = p.star
 
-            #print 'Select Probe',i,':',p.x,p.y,sTarg.x,sTarg.y
+            #print 'Select Probe',i,':',p.x,p.y,sTarg.x,sTarg.y,sTarg.catindex
 
         return True
 
