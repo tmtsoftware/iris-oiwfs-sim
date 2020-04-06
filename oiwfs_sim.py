@@ -65,7 +65,7 @@ at            = np.radians(at_deg)      # angular acceleration (rad/s^2)
 # tolerance for arriving at destination (mm) - related to step sizes/vel
 tol_stuck     = dt*np.sqrt(vr_max**2 + (vt_max*r_max)**2)
 #tol           = 3.*dt*np.sqrt(vr_max**2 + (vt_max*r_max)**2)
-tol           = 1
+tol           = 2
 tol_sq        = tol**2
 tol_comp      = tol/2 # tangential/radial component of tolerance
 tol_col_sq    = tol_col**2
@@ -732,6 +732,7 @@ class State(object):
                  i_ref=None,
                  levels=None,
                  vectors=None,
+                 end_pos=None,
                  star_vel=None,
                  wcs=None):
 
@@ -785,6 +786,8 @@ class State(object):
         self.vectors=vectors
         self.vectors_object=None
         self.star_vel=star_vel
+        self.end_pos=end_pos
+
         if catalog is not None:
             # File is assumed to consist of x, y columns of positions
             # in degrees. Also assume that they are at a low Dec. So
@@ -799,6 +802,23 @@ class State(object):
             self.catalog_assigned = np.array([False]*len(self.catalog_x))
             self.catalog_unassigned = []
             self.fieldstars_object = None
+
+            if self.star_vel is not None and self.end_pos is None:
+                # If no end_pos given, guess one from the velocity vector
+                # and the extent of the catalog. Note that the
+                # velocity vector is the opposite of the direction of
+                # travel because we scroll the stars in front of the
+                # OIWFS, hence the sign negations.
+                if -np.sign(self.star_vel[0]) == 1:
+                    end_pos_x = np.max(self.catalog_xdeg)
+                else:
+                    end_pos_x = np.min(self.catalog_xdeg)
+                if -np.sign(self.star_vel[1]) == 1:
+                    end_pos_y = np.max(self.catalog_ydeg)
+                else:
+                    end_pos_y = np.min(self.catalog_ydeg)
+                self.end_pos=(end_pos_x,end_pos_y)
+
 
         # Starting OIWFS pointing provided in catalog coordinates
         if catalog_start:
@@ -870,6 +890,7 @@ class State(object):
         if self.title_str is not None:
             plt.title(self.title_str)
 
+
         # all animated elements are initialized here
         for i in range(len(self.probes)):
             p = self.probes[i]
@@ -883,7 +904,11 @@ class State(object):
         for s in self.stars:
             s.symbol, = self.ax.plot([], [], 'r*', markersize=10,zorder=101)
 
-        self.text = self.ax.text(0.8,0.9,'',transform=self.ax.transAxes)
+        # reconfig time
+        self.time_text = self.ax.text(0.8,0.9,'',transform=self.ax.transAxes)
+
+        # position if scrolling through starfield
+        self.pos_text = self.ax.text(0.01,0.01,'',transform=self.ax.transAxes)
 
         if self.plotlim is not None:
             plt.axis(self.plotlim)
@@ -892,7 +917,8 @@ class State(object):
         self.graphics_objects.extend([p.trail for p in self.probes])
         self.graphics_objects.extend([p.head for p in self.probes])
         self.graphics_objects.extend([s.symbol for s in self.stars])
-        self.graphics_objects.append(self.text)
+        self.graphics_objects.append(self.time_text)
+        self.graphics_objects.append(self.pos_text)
 
     def random_stars(self):
         """ Generate new random star positions """
@@ -1676,6 +1702,8 @@ class State(object):
         if self.fname: # and (self.vectors or self.contours):
             print "Animate frame",i
 
+        #print i
+
         objects = copy.copy(self.graphics_objects) # shallow copy
 
         for frame in range(self.frameskip):
@@ -1704,6 +1732,12 @@ class State(object):
                     self.oiwfs_x0 = self.oiwfs_x0 - self.star_vel[0]*dt
                     self.oiwfs_y0 = self.oiwfs_y0 - self.star_vel[1]*dt
 
+                    # Update text displaying postion
+                    self.pos_text.set_text('%8.5f,%8.5f (end=%8.5f,%8.5f) deg' % \
+                        (self.oiwfs_x0/(platescale*3600),\
+                        self.oiwfs_y0/(platescale*3600), \
+                        self.end_pos[0], \
+                        self.end_pos[1]) )
 
                     # Which stars are in the OIWFS patrol area
                     star_dist = np.sqrt((self.catalog_x - self.oiwfs_x0)**2 + \
@@ -1833,7 +1867,7 @@ class State(object):
                     if self.dwell_count < self.dwell:
                         self.dwell_count = self.dwell_count + 1
                         if self.display:
-                            self.text.set_text('t='+str(self.move_time)+' s')
+                            self.time_text.set_text('t='+str(self.move_time)+' s')
                         update = False
 
                         if single:
@@ -2137,6 +2171,7 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             frameskip=1,                # Display 1/frameskip frames of ani
             fps=None,                   # fps for animation
             bitrate=3000,               # bitrate if animation to file
+            end_pos=None,               # Where simulation stops if star_vel
             star_vel=None               # move stars across focal plane
 ):
 
@@ -2174,6 +2209,7 @@ def run_sim(animate='cont',             # one of 'cont','track',None
               i_ref=i_ref,
               levels=levels,
               vectors=vectors,
+              end_pos=end_pos,
               star_vel=star_vel)
 
     if animate == 'cont':
@@ -2183,11 +2219,27 @@ def run_sim(animate='cont',             # one of 'cont','track',None
         else:
             blit=False
 
+        if s.end_pos is not None and s.star_vel is not None and frames is None:
+            # Calculate the number of frames that gets us to the
+            # end position. Notice that we negate the velocity
+            # vectory because we scroll the stars in front of the OIWFS
+            travel = np.array(s.end_pos)*platescale*3600
+            all_t=[]
+            if s.star_vel[0] != 0:
+                all_t.append(-travel[0]/s.star_vel[0])
+            if s.star_vel[1] != 0:
+                all_t.append(-travel[1]/s.star_vel[1])
+            
+
+            frames = int(min(all_t)/dt)
+
+
         ani = animation.FuncAnimation(s.fig, s.animate,
                                       blit=blit,
                                       interval=0.,
                                       frames=frames,
-                                      init_func=s.init_animation)
+                                      init_func=s.init_animation,
+                                      repeat=False)
 
         if fname is not None:
             if fps is None:
@@ -2374,7 +2426,7 @@ if __name__ == '__main__':
     # animated non-sidereal tracking, write to file
     #run_sim(animate='cont',display=True,dwell=0,frameskip=1,
     #        plotlim=[-150,150,-150,150], star_vel=[0.5,2],
-    #        aster=aster_move,aster_select=True)#,
+    #        aster=aster_move,aster_select=True,
     #        fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
     #sys.exit(1)
 
@@ -2383,8 +2435,13 @@ if __name__ == '__main__':
     if True:
         run_sim(animate='cont',display=True,dwell=0,frameskip=1,
                 plotlim=[-150,150,-150,150], star_vel=[-2,0],
+                end_pos=[0.01,0],
+                #plotlim=[-150,150,-150,150], star_vel=[-0.1*platescale,0],#[-2,0],
                 catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
                 #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
+
+        # We get here after the plot is closed
+        sys.exit(1)
 
     # --- Series of figures for SPIE paper --------------------------------
     #figtype = 'pdf'
