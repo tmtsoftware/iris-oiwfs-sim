@@ -726,6 +726,7 @@ class State(object):
                  display=True,
                  dwell=200,
                  frameskip=1,
+                 frames=None,
                  plotlim=None,
                  contours=None,
                  contour_steps=1,
@@ -779,6 +780,7 @@ class State(object):
         self.use_vel_servo=False
         self.tran_scale=tran_scale
         self.frameskip=frameskip
+        self.frames=frames
 
         self.contours=contours
         self.contour_steps=contour_steps
@@ -819,6 +821,31 @@ class State(object):
                     end_pos_y = np.min(self.catalog_ydeg)
                 self.end_pos=(end_pos_x,end_pos_y)
 
+        if self.end_pos is not None and self.star_vel is not None and self.frames is None:
+            # Calculate the number of frames that gets us to the
+            # end position. Notice that we negate the velocity
+            # vectory because we scroll the stars in front of the OIWFS
+            travel = np.array(self.end_pos)*platescale*3600
+            all_t=[]
+            if self.star_vel[0] != 0:
+                all_t.append(-travel[0]/self.star_vel[0])
+            if self.star_vel[1] != 0:
+                all_t.append(-travel[1]/self.star_vel[1])
+
+            frames = int(min(all_t)/dt)
+            self.frames = frames
+
+        if self.frames is not None:
+            # pre-allocate buffers to store coordinates
+            self.all_probe_coords=np.zeros((frames,3,2))
+            self.all_probe_targs=np.zeros((frames,3,2))
+            self.all_t=np.zeros((frames))
+            self.all_oiwfs_coords=np.zeros((frames,2))
+        else:
+            self.all_probe_coords=None
+            self.all_probe_targs=None
+            self.all_t=None
+            self.all_oiwfs_coords=None
 
         # Starting OIWFS pointing provided in catalog coordinates
         if catalog_start:
@@ -1940,7 +1967,20 @@ class State(object):
                             self.vectors_object = self.plot_vectors()
                             objects.append(self.vectors_object)
 
-                
+            # Record position data
+            if self.all_probe_coords is not None:
+                for j in range(len(self.probes)):
+                    p = self.probes[j]
+                    self.all_probe_coords[i,j,:] = (p.x,p.y)
+
+                    if p.star is not None:
+                        self.all_probe_targs[i,j,:] = (p.star.x,p.star.y)
+                    else:
+                        self.all_probe_targs[i,j,:] = (None,None)
+
+                self.all_t[i] = i*dt
+                self.all_oiwfs_coords[i,:] = (self.oiwfs_x0,self.oiwfs_y0)
+        
 
         # Return objects involved with animation
         return objects
@@ -2203,6 +2243,7 @@ def run_sim(animate='cont',             # one of 'cont','track',None
               display=display,
               dwell=dwell,
               frameskip=frameskip,
+              frames=frames,
               plotlim=plotlim,
               contours=contours,
               contour_steps=contour_steps,
@@ -2219,25 +2260,10 @@ def run_sim(animate='cont',             # one of 'cont','track',None
         else:
             blit=False
 
-        if s.end_pos is not None and s.star_vel is not None and frames is None:
-            # Calculate the number of frames that gets us to the
-            # end position. Notice that we negate the velocity
-            # vectory because we scroll the stars in front of the OIWFS
-            travel = np.array(s.end_pos)*platescale*3600
-            all_t=[]
-            if s.star_vel[0] != 0:
-                all_t.append(-travel[0]/s.star_vel[0])
-            if s.star_vel[1] != 0:
-                all_t.append(-travel[1]/s.star_vel[1])
-            
-
-            frames = int(min(all_t)/dt)
-
-
         ani = animation.FuncAnimation(s.fig, s.animate,
                                       blit=blit,
                                       interval=0.,
-                                      frames=frames,
+                                      frames=s.frames,
                                       init_func=s.init_animation,
                                       repeat=False)
 
@@ -2326,6 +2352,9 @@ def run_sim(animate='cont',             # one of 'cont','track',None
         pass
     else:
         plt.show()
+
+    # Return state so that we can check position stats
+    return s
 
 
 # Configure probes based on where the telescope is pointed, the IRIS
@@ -2433,13 +2462,20 @@ if __name__ == '__main__':
 
     # animated non-sidereal tracking scrolling through catalog, show on-screen
     if True:
-        run_sim(animate='cont',display=True,dwell=0,frameskip=1,
+        s = run_sim(animate='cont',display=True,dwell=0,frameskip=1,
                 plotlim=[-150,150,-150,150], star_vel=[-2,0],
                 end_pos=[0.01,0],
                 #plotlim=[-150,150,-150,150], star_vel=[-0.1*platescale,0],#[-2,0],
                 catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
                 #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
 
+        logdata={
+            'probe_coords':s.all_probe_coords,
+            'probe_targs':s.all_probe_targs,
+            'oiwfs_coords':s.all_oiwfs_coords,
+            't':s.all_t
+        }
+        np.savez('simulation.npz',**logdata)
         # We get here after the plot is closed
         sys.exit(1)
 
