@@ -23,9 +23,9 @@ import random
 # Constants
 platescale    = 2.182   # platescale in OIWFS plane (mm/arcsec)
 r_patrol      = 60*platescale # radius of the patrol area in (mm)
-r_max         = 300         # maximum extension of probes (mm)
-r_overshoot   = 20          # distance by which probes overshoot centre (mm)
-r_head        = 10          # circumscribe 14x14 square (mm)
+r_max         = 330         # maximum extension of probes (mm)
+r_overshoot   = 5           # distance by which probes overshoot centre (mm)
+r_head        = 15.606/2.   # circumscribe rectangular head (mm)
 r_min         = r_patrol    # minimum extension of probes (mm)
 r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
 r0            = r_max-r_patrol # initial/parked probe extension (mm)
@@ -797,6 +797,8 @@ class State(object):
             for i in range(len(self.catalog_stars)):
                 self.catalog_stars[i].index = i # hack
             self.catalog_assigned = np.array([False]*len(self.catalog_x))
+            self.catalog_unassigned = []
+            self.fieldstars_object = None
 
         # Starting OIWFS pointing provided in catalog coordinates
         if catalog_start:
@@ -1777,7 +1779,10 @@ class State(object):
                         #    print("Could not reconfig probes")
                         #    sys.exit(1)
 
-                    
+                    # Identify which stars are infield but not assigned so
+                    # that they can be plotted with a smaller symbol
+                    self.catalog_unassigned = infield[np.where(self.catalog_assigned[infield] == False)[0]]
+
                     # Hacking to see if starfield moves, so no
                     # probe movement.
                     #update = False
@@ -1861,6 +1866,19 @@ class State(object):
                 for s in self.stars:
                     s.update_symbol()
 
+            # Field stars
+            if self.catalog_unassigned.any():
+                # Get coord of visible field stars relative to current OIWFS pointing
+                field_x = np.array([s.x for s in self.catalog_stars[self.catalog_unassigned]])
+                field_y = np.array([s.y for s in self.catalog_stars[self.catalog_unassigned]])
+                field_x = field_x - self.oiwfs_x0
+                field_y = field_y - self.oiwfs_y0
+
+                if self.fieldstars_object:
+                    self.fieldstars_object.remove()
+                self.fieldstars_object, = self.ax.plot(field_x, field_y, '*', color='orange', markersize=5,zorder=50)
+                objects.append(self.fieldstars_object)
+
             # Move the probes
             if update:
                 if self.move_time == 0:
@@ -1887,6 +1905,8 @@ class State(object):
                                 self.vectors_object.remove()
                             self.vectors_object = self.plot_vectors()
                             objects.append(self.vectors_object)
+
+                
 
         # Return objects involved with animation
         return objects
