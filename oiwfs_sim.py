@@ -832,15 +832,16 @@ class State(object):
             if self.star_vel[1] != 0:
                 all_t.append(-travel[1]/self.star_vel[1])
 
-            frames = int(min(all_t)/dt)
+            # remember to account for frameskip
+            frames = int((min(all_t)/dt)/frameskip)
             self.frames = frames
 
         if self.frames is not None:
             # pre-allocate buffers to store coordinates
-            self.all_probe_coords=np.zeros((frames,3,2))
-            self.all_probe_targs=np.zeros((frames,3,2))
-            self.all_t=np.zeros((frames))
-            self.all_oiwfs_coords=np.zeros((frames,2))
+            self.all_probe_coords=np.zeros((frames*frameskip,3,2))
+            self.all_probe_targs=np.zeros((frames*frameskip,3,2))
+            self.all_t=np.zeros((frames*frameskip))
+            self.all_oiwfs_coords=np.zeros((frames*frameskip,2))
         else:
             self.all_probe_coords=None
             self.all_probe_targs=None
@@ -1729,7 +1730,8 @@ class State(object):
         if self.fname: # and (self.vectors or self.contours):
             print "Animate frame",i
 
-        #print i
+        #if i >= 1700:
+        #    pass
 
         objects = copy.copy(self.graphics_objects) # shallow copy
 
@@ -1742,6 +1744,9 @@ class State(object):
                 show=False
 
             update = True
+
+            # This is the absolute step in the simulation
+            sim_index = i*self.frameskip + frame
 
             if self.star_vel:
                 if self.catalog:
@@ -1927,18 +1932,18 @@ class State(object):
                 for s in self.stars:
                     s.update_symbol()
 
-            # Field stars
-            if self.catalog_unassigned.any():
-                # Get coord of visible field stars relative to current OIWFS pointing
-                field_x = np.array([s.x for s in self.catalog_stars[self.catalog_unassigned]])
-                field_y = np.array([s.y for s in self.catalog_stars[self.catalog_unassigned]])
-                field_x = field_x - self.oiwfs_x0
-                field_y = field_y - self.oiwfs_y0
+            # Field stars (only draw last time through frameskip loop)
+            if (frame == (self.frameskip-1)) and self.catalog_unassigned.any():
+                 # Get coord of visible field stars relative to current OIWFS pointing
+                 field_x = np.array([s.x for s in self.catalog_stars[self.catalog_unassigned]])
+                 field_y = np.array([s.y for s in self.catalog_stars[self.catalog_unassigned]])
+                 field_x = field_x - self.oiwfs_x0
+                 field_y = field_y - self.oiwfs_y0
 
-                if self.fieldstars_object:
-                    self.fieldstars_object.remove()
-                self.fieldstars_object, = self.ax.plot(field_x, field_y, '*', color='orange', markersize=5,zorder=50)
-                objects.append(self.fieldstars_object)
+                 if self.fieldstars_object:
+                     self.fieldstars_object.remove()
+                 self.fieldstars_object, = self.ax.plot(field_x, field_y, '*', color='orange', markersize=5,zorder=50)
+                 objects.append(self.fieldstars_object)
 
             # Move the probes
             if update:
@@ -1971,15 +1976,15 @@ class State(object):
             if self.all_probe_coords is not None:
                 for j in range(len(self.probes)):
                     p = self.probes[j]
-                    self.all_probe_coords[i,j,:] = (p.x,p.y)
+                    self.all_probe_coords[sim_index,j,:] = (p.x,p.y)
 
                     if p.star is not None:
-                        self.all_probe_targs[i,j,:] = (p.star.x,p.star.y)
+                        self.all_probe_targs[sim_index,j,:] = (p.star.x,p.star.y)
                     else:
-                        self.all_probe_targs[i,j,:] = (None,None)
+                        self.all_probe_targs[sim_index,j,:] = (None,None)
 
-                self.all_t[i] = i*dt
-                self.all_oiwfs_coords[i,:] = (self.oiwfs_x0,self.oiwfs_y0)
+                self.all_t[sim_index] = i*dt
+                self.all_oiwfs_coords[sim_index,:] = (self.oiwfs_x0,self.oiwfs_y0)
         
 
         # Return objects involved with animation
@@ -2462,20 +2467,25 @@ if __name__ == '__main__':
 
     # animated non-sidereal tracking scrolling through catalog, show on-screen
     if True:
-        s = run_sim(animate='cont',display=True,dwell=0,frameskip=1,
-                plotlim=[-150,150,-150,150], star_vel=[-2,0],
-                end_pos=[0.01,0],
-                #plotlim=[-150,150,-150,150], star_vel=[-0.1*platescale,0],#[-2,0],
+        s = run_sim(animate='cont',display=True,dwell=0,frameskip=10,
+                #plotlim=[-150,150,-150,150], star_vel=[-2,0],
+                end_pos=[0.1,0],
+                #end_pos=[0.98,0],
+                #end_pos=[0.001,0],
+                plotlim=[-150,150,-150,150], star_vel=[-0.1*platescale,0],#[-2,0],
                 catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
                 #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
 
         logdata={
+            'dt':dt,
             'probe_coords':s.all_probe_coords,
             'probe_targs':s.all_probe_targs,
             'oiwfs_coords':s.all_oiwfs_coords,
             't':s.all_t
         }
+        #np.savez('simulation_0.1arcmin_per_sec.npz',**logdata)
         np.savez('simulation.npz',**logdata)
+        
         # We get here after the plot is closed
         sys.exit(1)
 
