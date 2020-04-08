@@ -82,10 +82,13 @@ for i in range(3):
                 startmoving = j
 
 
-    ax.plot(t,err_abs,color=colors[i])
- 
+    #ax.plot(t,err_abs,'--',color=colors[i])
+    ax.plot(t,probe_targs[:,i,0],color=colors[i])
+    ax.plot(t,probe_targs[:,i,1],color=colors[i])
+    #ax.plot(t,oiwfs_coords[:,0],'k')
+
 ax.set_xlabel('Time (s)')
-plt.ylim((-10,250))
+plt.ylim((-250,220))
 plt.show()
 plt.close()
 

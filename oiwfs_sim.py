@@ -1983,7 +1983,7 @@ class State(object):
                     else:
                         self.all_probe_targs[sim_index,j,:] = (None,None)
 
-                self.all_t[sim_index] = i*dt
+                self.all_t[sim_index] = sim_index*dt
                 self.all_oiwfs_coords[sim_index,:] = (self.oiwfs_x0,self.oiwfs_y0)
         
 
@@ -2472,7 +2472,7 @@ if __name__ == '__main__':
                 end_pos=[0.1,0],
                 #end_pos=[0.98,0],
                 #end_pos=[0.001,0],
-                plotlim=[-150,150,-150,150], star_vel=[-0.1*platescale,0],#[-2,0],
+                plotlim=[-150,150,-150,150], star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
                 catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
                 #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
 
