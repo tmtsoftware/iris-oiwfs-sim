@@ -11,9 +11,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-logfile='simulation.npz'
+#logfile='simulation.npz'
 #logfile='simulation_2mm_per_sec.npz'
 #logfile='simulation_0.1arcmin_per_sec.npz'
+#logfile='simulation_0.1arcsec_per_sec.npz'
+logfile='simulation_0.1arcsec_per_sec_trunc.npz'
+
 
 logdata = np.load(logfile)
 t = logdata['t']
@@ -25,6 +28,27 @@ if 'dt' in logdata:
 else:
     dt = 0.05
 n = len(t)
+
+# Truncate arrays if full simulation didn't run
+wherezero = np.argwhere(t==0)
+if len(wherezero) > 1:
+    last = wherezero[1][0] # upper range for slice that had data
+    t = t[:last]
+    probe_coords = probe_coords[:last,:,:]
+    probe_targs = probe_targs[:last,:,:]
+    oiwfs_coords = oiwfs_coords[:last,:]
+
+    if True:
+        trunclogdata={
+                'dt':dt,
+                'probe_coords':probe_coords,
+                'probe_targs':probe_targs,
+                'oiwfs_coords':oiwfs_coords,
+                't':t
+            }
+
+        trunclogfile = logfile.rsplit('.npz')[0]+'_trunc.npz'
+        np.savez(trunclogfile,**trunclogdata)
 
 # calculate and plot error signal for each probe
 colors=['r','g','b']
@@ -115,8 +139,38 @@ for i in range(1,n):
         config_times.append(config_time)
         startactive=i
 
+
+print "Means:\nstable config (all probes) %f s\nparked %f s\nmoving %f s\nontarget %f s" % \
+    (np.mean(config_times),
+    np.mean(parkedtimes),
+    np.mean(movingtimes),
+    np.mean(ontargettimes))
+
+rects = []
+labels_str = []
+labels = ('stable config','parked','moving','ontarget')
+data = (config_times,parkedtimes,movingtimes,ontargettimes)
+
 fig = plt.figure(figsize=(12,8))
 ax = fig.add_subplot(1,1,1)
+
+for i in range(4):
+    d = data[i]
+    l = labels[i]
+
+    rect = ax.bar(
+                hist['x_bin'] + xoffs[i],
+                hist['count'],
+                barwidth,
+                color=colours[i],
+                log=ylog,
+                linewidth=0,
+                zorder=3)
+    rects.append(rect[0])
+    label_strs.append('{}: {:.{prec}f} $\pm$ {:.{prec}f}{}'.format(
+        histlabels[i], meanval[i], stdval[i], units, prec=prec))
+
+
 
 ax.hist(config_times,100)
 
@@ -126,9 +180,3 @@ plt.title('Distribution of time in stable config')
 #plt.ylim((-10,250))
 plt.show()
 plt.close()
-
-print "Means:\nstable config (all probes) %f s\nparked %f s\nmoving %f s\nontarget %f s" % \
-    (np.mean(config_times),
-    np.mean(parkedtimes),
-    np.mean(movingtimes),
-    np.mean(ontargettimes))

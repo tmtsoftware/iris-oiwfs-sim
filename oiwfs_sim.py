@@ -2467,12 +2467,13 @@ if __name__ == '__main__':
 
     # animated non-sidereal tracking scrolling through catalog, show on-screen
     if True:
-        s = run_sim(animate='cont',display=True,dwell=0,frameskip=10,
+        s = run_sim(animate='cont',display=True,dwell=0,frameskip=50,
                 #plotlim=[-150,150,-150,150], star_vel=[-2,0],
-                end_pos=[0.1,0],
+                #end_pos=[0.1,0],
                 #end_pos=[0.98,0],
-                #end_pos=[0.001,0],
-                plotlim=[-150,150,-150,150], star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
+                end_pos=[0.33,0],
+                star_vel=[-(0.1/60.)*platescale,0],
+                plotlim=[-150,150,-150,150], #star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
                 catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
                 #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
 
