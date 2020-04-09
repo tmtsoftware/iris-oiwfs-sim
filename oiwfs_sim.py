@@ -1728,7 +1728,7 @@ class State(object):
     def animate(self, i, single=False):
 
         if self.fname: # and (self.vectors or self.contours):
-            print "Animate frame",i
+            print "Animate frame",i,"/",self.frames
 
         #if i >= 1700:
         #    pass
@@ -2265,22 +2265,34 @@ def run_sim(animate='cont',             # one of 'cont','track',None
         else:
             blit=False
 
+        if fps is None:
+            fps = 1/dt
+        
+        if fname is None:
+            interval = 0. # run at max speed possible on-screen
+        if fname is not None:
+            interval = 1./fps # for file writing
+
         ani = animation.FuncAnimation(s.fig, s.animate,
                                       blit=blit,
-                                      interval=0.,
+                                      interval=interval,
                                       frames=s.frames,
                                       init_func=s.init_animation,
                                       repeat=False)
 
         if fname is not None:
-            if fps is None:
-                fps = 1/dt
+
             #Writer = animation.writers['mencoder']
             #writer = Writer(fps=fps,metadata=dict(artist='Me'),bitrate=bitrate)
             #writer = MencoderWriter(fps=fps,metadata=dict(artist='Me'))
-            writer = MencoderFileWriter(fps=fps,metadata=dict(artist='Me'))
+            
+            # used to work back when SPIE paper written in 2016
+            #writer = MencoderFileWriter(fps=fps,metadata=dict(artist='Me'))
+            #ani.save(fname, writer=writer,fps=fps, dpi=dpi)
 
-            ani.save(fname, writer=writer,fps=fps, dpi=dpi)
+            # newer attempt with ffmpeg
+            writer = animation.FFMpegFileWriter(fps=fps,metadata=dict(artist='Me'))
+            ani.save(fname, writer=writer, dpi=dpi)
 
 
     elif animate == 'track':
@@ -2467,15 +2479,15 @@ if __name__ == '__main__':
 
     # animated non-sidereal tracking scrolling through catalog, show on-screen
     if True:
-        s = run_sim(animate='cont',display=True,dwell=0,frameskip=50,
+        s = run_sim(animate='cont',display=True,dwell=0,frameskip=1,
                 #plotlim=[-150,150,-150,150], star_vel=[-2,0],
                 #end_pos=[0.1,0],
-                end_pos=[0.98,0],
+                end_pos=[0.05,0],
                 #end_pos=[0.33,0],
                 star_vel=[-1.0*platescale,0], # platescale in mm/arcsec
                 plotlim=[-150,150,-150,150], #star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
-                catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
-                #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
+                catalog='stripe.txt',catalog_start=[0,0], aster_select=False,
+                fname='nonsidereal.mp4',fps=60,dpi=150)
 
         logdata={
             'dt':dt,
