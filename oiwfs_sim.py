@@ -2470,9 +2470,9 @@ if __name__ == '__main__':
         s = run_sim(animate='cont',display=True,dwell=0,frameskip=50,
                 #plotlim=[-150,150,-150,150], star_vel=[-2,0],
                 #end_pos=[0.1,0],
-                #end_pos=[0.98,0],
-                end_pos=[0.33,0],
-                star_vel=[-(0.1/60.)*platescale,0],
+                end_pos=[0.98,0],
+                #end_pos=[0.33,0],
+                star_vel=[-1.0*platescale,0], # platescale in mm/arcsec
                 plotlim=[-150,150,-150,150], #star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
                 catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
                 #fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
@@ -2484,8 +2484,8 @@ if __name__ == '__main__':
             'oiwfs_coords':s.all_oiwfs_coords,
             't':s.all_t
         }
-        #np.savez('simulation_0.1arcmin_per_sec.npz',**logdata)
-        np.savez('simulation.npz',**logdata)
+        np.savez('simulation_1.0arcsec_per_sec.npz',**logdata)
+        #np.savez('simulation.npz',**logdata)
         
         # We get here after the plot is closed
         sys.exit(1)

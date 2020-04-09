@@ -11,12 +11,13 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-logfile='simulation.npz'
+#logfile='simulation.npz'
 #logfile='simulation_2mm_per_sec.npz'
 #logfile='simulation_0.1arcmin_per_sec.npz'
 #logfile='simulation_0.1arcsec_per_sec.npz'
 #logfile='simulation_0.1arcsec_per_sec_trunc.npz'
-
+#logfile='simulation_0.5arcsec_per_sec.npz'
+logfile='simulation_1.0arcsec_per_sec.npz'
 
 logdata = np.load(logfile)
 t = logdata['t']
@@ -117,6 +118,14 @@ plt.ylim((-250,220))
 plt.show()
 plt.close()
 
+# Convert to numpy arrays
+parkedtimes = np.array(parkedtimes)
+ontargettimes = np.array(ontargettimes)
+movingtimes = np.array(movingtimes)
+
+# clip weird outliers
+movingtimes=movingtimes[movingtimes<100]
+
 # Calculate how many probes on-target (active in AO) over time
 
 ontarget = all_state==0
@@ -139,6 +148,7 @@ for i in range(1,n):
         config_time = (i-startactive)*dt
         config_times.append(config_time)
         startactive=i
+config_times = np.array(config_times)
 
 config_mean = np.mean(config_times)
 parked_mean = np.mean(parkedtimes)
@@ -157,11 +167,13 @@ labels = [
     'probe ontarget ($\mu$=%.1fs)' % ontarget_mean]
 data = (config_times,parkedtimes,movingtimes,ontargettimes)
 
-fig = plt.figure(figsize=(12,8))
+fig = plt.figure(figsize=(8,5))
 ax = fig.add_subplot(1,1,1)
 
-binsize=10.
-bins = np.arange(0,np.max(ontargettimes),step=binsize)
+#binsize=10.
+#bins = np.arange(0,np.max(ontargettimes),step=binsize)
+bins = np.linspace(0,np.max(ontargettimes),num=20)
+binsize=bins[1]-bins[0]
 bincen = (bins[1:]+bins[:-1])/2.
 
 for i in range(4):
@@ -184,7 +196,7 @@ ax.legend(rects, labels)
 
 ax.set_xlabel('Time (s)')
 ax.set_ylabel('Density')
-plt.title('Time distributions')
+plt.title('Time distributions (sim length=%.1fhr, %i reconfigs)' % (t[-1]/3600,len(config_times)))
 #plt.ylim((-10,250))
 plt.show()
 plt.close()
