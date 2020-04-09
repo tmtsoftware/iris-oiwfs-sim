@@ -11,11 +11,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-#logfile='simulation.npz'
+logfile='simulation.npz'
 #logfile='simulation_2mm_per_sec.npz'
 #logfile='simulation_0.1arcmin_per_sec.npz'
 #logfile='simulation_0.1arcsec_per_sec.npz'
-logfile='simulation_0.1arcsec_per_sec_trunc.npz'
+#logfile='simulation_0.1arcsec_per_sec_trunc.npz'
 
 
 logdata = np.load(logfile)
@@ -38,7 +38,8 @@ if len(wherezero) > 1:
     probe_targs = probe_targs[:last,:,:]
     oiwfs_coords = oiwfs_coords[:last,:]
 
-    if True:
+    # Set to True to create truncated file
+    if False:
         trunclogdata={
                 'dt':dt,
                 'probe_coords':probe_coords,
@@ -51,7 +52,7 @@ if len(wherezero) > 1:
         np.savez(trunclogfile,**trunclogdata)
 
 # calculate and plot error signal for each probe
-colors=['r','g','b']
+colors=['r','g','b','k']
 
 fig = plt.figure(figsize=(12,8))
 ax = fig.add_subplot(1,1,1)
@@ -139,44 +140,51 @@ for i in range(1,n):
         config_times.append(config_time)
         startactive=i
 
+config_mean = np.mean(config_times)
+parked_mean = np.mean(parkedtimes)
+moving_mean = np.mean(movingtimes)
+ontarget_mean = np.mean(ontargettimes)
+
 
 print "Means:\nstable config (all probes) %f s\nparked %f s\nmoving %f s\nontarget %f s" % \
-    (np.mean(config_times),
-    np.mean(parkedtimes),
-    np.mean(movingtimes),
-    np.mean(ontargettimes))
-
+    (config_mean, parked_mean, moving_mean, ontarget_mean)
+    
 rects = []
-labels_str = []
-labels = ('stable config','parked','moving','ontarget')
+labels = [
+    'all probes stable config ($\mu$=%.1fs)' % config_mean,
+    'probe parked ($\mu$=%.1fs)' % parked_mean,
+    'probe moving ($\mu$=%.1fs)' % moving_mean,
+    'probe ontarget ($\mu$=%.1fs)' % ontarget_mean]
 data = (config_times,parkedtimes,movingtimes,ontargettimes)
 
 fig = plt.figure(figsize=(12,8))
 ax = fig.add_subplot(1,1,1)
 
+binsize=10.
+bins = np.arange(0,np.max(ontargettimes),step=binsize)
+bincen = (bins[1:]+bins[:-1])/2.
+
 for i in range(4):
     d = data[i]
     l = labels[i]
 
+    h = np.histogram(d,bins,density=True)
+
     rect = ax.bar(
-                hist['x_bin'] + xoffs[i],
-                hist['count'],
-                barwidth,
-                color=colours[i],
-                log=ylog,
-                linewidth=0,
-                zorder=3)
+                bincen + i*binsize/4 - 2*binsize/4,
+                h[0],
+                width=binsize/5.,
+                color=colors[i],
+                linewidth=0)
     rects.append(rect[0])
-    label_strs.append('{}: {:.{prec}f} $\pm$ {:.{prec}f}{}'.format(
-        histlabels[i], meanval[i], stdval[i], units, prec=prec))
 
+ax.legend(rects, labels)
 
-
-ax.hist(config_times,100)
+#ax.hist(config_times,100)
 
 ax.set_xlabel('Time (s)')
-ax.set_ylabel('Number')
-plt.title('Distribution of time in stable config')
+ax.set_ylabel('Density')
+plt.title('Time distributions')
 #plt.ylim((-10,250))
 plt.show()
 plt.close()
