@@ -18,17 +18,19 @@ import numpy as np
 import sys
 import time
 from astropy import wcs
+import random
 
 # Constants
 platescale    = 2.182   # platescale in OIWFS plane (mm/arcsec)
 r_patrol      = 60*platescale # radius of the patrol area in (mm)
-r_max         = 300         # maximum extension of probes (mm)
-r_overshoot   = 20          # distance by which probes overshoot centre (mm)
-r_head        = 25/2.       # radius of probe head (mm)
+r_max         = 330         # maximum extension of probes (mm)
+r_overshoot   = 5           # distance by which probes overshoot centre (mm)
+r_head        = 15.606/2.   # circumscribe rectangular head (mm)
 r_min         = r_patrol    # minimum extension of probes (mm)
 r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
-r0            = r_max-r_patrol # initial probe extension (mm)
+r0            = r_max-r_patrol # initial/parked probe extension (mm)
 maxstars      = 3     # maximum number of stars
+r_ifu         = 6.3*platescale # radius of region to avoid for IFU (mm)
 
 vmax = 13.2
 vr_max        = vmax #vmax/np.sqrt(2)
@@ -48,6 +50,7 @@ tol_avoid     = r_star #100    # repulsive potential range (approaches 0 beyond)
 tol_attract   = 5      # attractive potential range (quadratic->conic)
 alpha         = 10.    # strength of collision avoidance potential
 beta          = 0.001  # strength of target attraction potential
+gamma         = 10.    # strength of IFU avoidance potential
 
 col_min       = 0.1    # closer to collision than this and we clip col potential
 vt_tol_deg    = 0.5    # what rotator velocity is stopped? (deg/s)
@@ -62,7 +65,7 @@ at            = np.radians(at_deg)      # angular acceleration (rad/s^2)
 # tolerance for arriving at destination (mm) - related to step sizes/vel
 tol_stuck     = dt*np.sqrt(vr_max**2 + (vt_max*r_max)**2)
 #tol           = 3.*dt*np.sqrt(vr_max**2 + (vt_max*r_max)**2)
-tol           = 1
+tol           = 2
 tol_sq        = tol**2
 tol_comp      = tol/2 # tangential/radial component of tolerance
 tol_col_sq    = tol_col**2
@@ -73,6 +76,9 @@ grad_tol      = 0.1*0.5*beta*vmax*dt # target potential gradient 1/2 step away
                                      # from the minimum
                                  
 d_clear       = 2.*r_origin*np.cos(np.radians(30)) # total probe lengths clear
+
+d_limit = 10*r_patrol    # distance for merit calc if probe is in limit for configuration
+d_collided = 20*r_patrol # distance for merit calc if probe collides in configuration
 
 #print "Arrival tolerance (mm):",tol
 
@@ -177,7 +183,7 @@ class Point(object):
 
 # Calculate the nearest point (and distance) on a line segment AB to a point C.
 # http://paulbourke.net/geometry/pointlineplane/
-def nearest_line_point(A,B,C):
+def nearest_linesegment_point(A,B,C):
     if (A.x == B.x) and (A.y == B.y):
         N = Point(A.x,A.y)
         d_sq = (C.x-A.x)**2 + (C.y-A.y)**2
@@ -207,6 +213,12 @@ def nearest_line_point(A,B,C):
 
     return N, d_sq
 
+# Calculate the distance between a line (y = mx + b) and a point P
+# Modified from https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
+def dist_line_point(m,b,P):
+    d = np.abs(-m*P.x + P.y - b)/np.sqrt(m**2 + 1)
+    return d
+
 # a star
 class Star(Point):
     def __init__(self, *args, **kwargs):
@@ -215,16 +227,23 @@ class Star(Point):
         # display element for star that will be animated when updated
         self.symbol = None
 
+        # catalog entry index if relevant
+        self.catindex = None
+
     def update_symbol(self):
         """ Update the star symbol """
         self.symbol.set_data([self.x], [self.y])
 
 # Exception class for probe actuators at limits
-class ProbeLimitsException(Exception):
+class ProbeLimits(Exception):
     pass
 
 # Exception class for collision
 class ProbeCollision(Exception):
+    pass
+
+# Exception class for probe vignetting IFU
+class ProbeVignetteIFU(Exception):
     pass
 
 # Calculate acceleration along axis to reach target
@@ -292,6 +311,15 @@ def max_vel(dir):
 
     return dir*speed
 
+# Unwind an angle so that it is in the range -Pi, +Pi
+def unwind(theta):
+    if theta > np.pi:
+        return theta-2*np.pi
+    elif theta < -np.pi:
+        return theta+2*np.pi
+    else:
+        return theta
+
 # --- class Probe --------------------------------------------------------------
 
 class Probe(object):
@@ -337,6 +365,12 @@ class Probe(object):
         self.trail_y = []
         self.head = None
 
+        # Calculate the home/parked position
+        self.x_home,self.y_home = self.pol2cart(r0,self.theta_home)
+
+        # Set if probe is parked/parking
+        self.park = False
+
     def set_cart(self, x, y):
         """ Set probe tips to new x, y location """
         self.x = x
@@ -372,8 +406,8 @@ class Probe(object):
         tip2 = Point(probe2.x, probe2.y)
         rh2 = probe2.r_head
 
-        N1, d_sq1 = nearest_line_point(origin,tip,tip2)
-        N2, d_sq2 = nearest_line_point(origin2,tip2,tip)
+        N1, d_sq1 = nearest_linesegment_point(origin,tip,tip2)
+        N2, d_sq2 = nearest_linesegment_point(origin2,tip2,tip)
 
         # Compensate for radius of probe head
         d_sq1 = d_sq1 - rh2**2
@@ -495,13 +529,18 @@ class Probe(object):
 
         if out_of_range:
             self.x, self.y = self.pol2cart(self.r, self.theta)
-            raise ProbeLimitsException(errstr)
+            raise ProbeLimits(errstr)
 
     def move(self):
         """ Perform one step of the motion integration """
 
         if self.moving is None:
             return
+
+        if self.star is None:
+            sTarg = Star(self.x_home,self.y_home)
+        else:
+            sTarg = self.star
 
         #if use_vel_servo:
         #    self.vr = self.vr + self.ar*dt
@@ -510,7 +549,7 @@ class Probe(object):
         #print "move1:",(self.r, np.degrees(self.theta)), \
         #    (self.vr*dt, np.degrees(self.vt*dt))
 
-        s_r,s_t = self.cart2pol(self.star.x,self.star.y)
+        s_r,s_t = self.cart2pol(sTarg.x,sTarg.y)
         targ_vr = (s_r - self.r)/dt
         targ_vt = (s_t - self.theta)/dt
 
@@ -526,6 +565,7 @@ class Probe(object):
         #else:
         r = self.r + self.vr*dt
         theta = self.theta + self.vt*dt
+        
         self.set_pol(r, theta)
 
         #print "move2:",(self.r, np.degrees(self.theta))
@@ -598,6 +638,49 @@ class Probe(object):
 
         return u, grad, A, B
 
+    def u_ifu(self):
+        """ Evaluate the potential,gradient for probe WRT IFU pickoff region"""
+
+        # distance of probe from centre of FOV
+        r_sq = self.x**2 + self.y**2
+        r = np.sqrt(r_sq)
+
+        # The distance from the probe to the pickoff region needs
+        # to account for the size of the prob head and the size of the
+        # region
+        d = r - (r_head + r_ifu)
+        if d <= 0:
+            raise ProbeVignetteIFU("Probe vignettes IFU! (%f,%f)" % \
+                                    (self.x,self.y))
+        else:
+            # Use the same collision kind of potential function
+            if d < col_min:
+                # We're very close, clipped potential
+                u = u_col_max
+            else:
+                if d < tol_avoid:
+                    u = 0.5*gamma*(1/d - 1/tol_avoid)**2
+                else:
+                    u = 0
+
+            # Direction (points towards probe from centre)
+            vect = np.array([self.x,self.y])
+            norm = np.linalg.norm(vect)
+            if norm <= 0:
+                raise ProbeVignetteIFU("Invalid norm detected")
+            dir = vect/norm
+
+            # Gradient
+            if d < tol_avoid:
+                grad_mag = alpha*(1/d - 1/tol_avoid)*1/d**2
+                grad = grad_mag*dir
+            else:
+                du_dx = 0
+                du_dy = 0
+                grad = np.array([du_dx,du_dy])
+
+        return u, grad
+
     def grad_pol(self, grad):
         """ Convert cartesian gradient (force) in polar given point"""
 
@@ -637,16 +720,20 @@ class State(object):
                  use_vel_servo=False,
                  tran_scale=3,
                  aster_start=0,
+                 catalog=None,
+                 catalog_start=None,
                  probe_cols=['b','b','b'],
                  display=True,
                  dwell=200,
                  frameskip=1,
+                 frames=None,
                  plotlim=None,
                  contours=None,
                  contour_steps=1,
                  i_ref=None,
                  levels=None,
                  vectors=None,
+                 end_pos=None,
                  star_vel=None,
                  wcs=None):
 
@@ -693,6 +780,7 @@ class State(object):
         self.use_vel_servo=False
         self.tran_scale=tran_scale
         self.frameskip=frameskip
+        self.frames=frames
 
         self.contours=contours
         self.contour_steps=contour_steps
@@ -700,6 +788,74 @@ class State(object):
         self.vectors=vectors
         self.vectors_object=None
         self.star_vel=star_vel
+        self.end_pos=end_pos
+
+        if catalog is not None:
+            # File is assumed to consist of x, y columns of positions
+            # in degrees. Also assume that they are at a low Dec. So
+            # just convert directly into mm offsets using platescale
+            self.catalog = catalog
+            self.catalog_xdeg, self.catalog_ydeg = np.loadtxt(catalog,unpack=True)
+            self.catalog_x = self.catalog_xdeg*3600*platescale  # mm
+            self.catalog_y = self.catalog_ydeg*3600*platescale  # mm
+            self.catalog_stars = np.array([Star(self.catalog_x[i],self.catalog_y[i]) for i in range(len(self.catalog_x))])
+            for i in range(len(self.catalog_stars)):
+                self.catalog_stars[i].index = i # hack
+            self.catalog_assigned = np.array([False]*len(self.catalog_x))
+            self.catalog_unassigned = []
+            self.fieldstars_object = None
+
+            if self.star_vel is not None and self.end_pos is None:
+                # If no end_pos given, guess one from the velocity vector
+                # and the extent of the catalog. Note that the
+                # velocity vector is the opposite of the direction of
+                # travel because we scroll the stars in front of the
+                # OIWFS, hence the sign negations.
+                if -np.sign(self.star_vel[0]) == 1:
+                    end_pos_x = np.max(self.catalog_xdeg)
+                else:
+                    end_pos_x = np.min(self.catalog_xdeg)
+                if -np.sign(self.star_vel[1]) == 1:
+                    end_pos_y = np.max(self.catalog_ydeg)
+                else:
+                    end_pos_y = np.min(self.catalog_ydeg)
+                self.end_pos=(end_pos_x,end_pos_y)
+
+        if self.end_pos is not None and self.star_vel is not None and self.frames is None:
+            # Calculate the number of frames that gets us to the
+            # end position. Notice that we negate the velocity
+            # vectory because we scroll the stars in front of the OIWFS
+            travel = np.array(self.end_pos)*platescale*3600
+            all_t=[]
+            if self.star_vel[0] != 0:
+                all_t.append(-travel[0]/self.star_vel[0])
+            if self.star_vel[1] != 0:
+                all_t.append(-travel[1]/self.star_vel[1])
+
+            # remember to account for frameskip
+            frames = int((min(all_t)/dt)/frameskip)
+            self.frames = frames
+
+        if self.frames is not None:
+            # pre-allocate buffers to store coordinates
+            self.all_probe_coords=np.zeros((frames*frameskip,3,2))
+            self.all_probe_targs=np.zeros((frames*frameskip,3,2))
+            self.all_t=np.zeros((frames*frameskip))
+            self.all_oiwfs_coords=np.zeros((frames*frameskip,2))
+        else:
+            self.all_probe_coords=None
+            self.all_probe_targs=None
+            self.all_t=None
+            self.all_oiwfs_coords=None
+
+        # Starting OIWFS pointing provided in catalog coordinates
+        if catalog_start:
+            self.oiwfs_x0 = catalog_start[0]*3600*platescale # mm
+            self.oiwfs_y0 = catalog_start[1]*3600*platescale # mm
+        else:
+            self.oiwfs_x0 = 0
+            self.oiwfs_y0 = 0
+
 
         if i_ref is not None:
             self.i_ref = i_ref
@@ -727,8 +883,14 @@ class State(object):
                                        xlim=all_x0,
                                        ylim=all_y0,
                                        aspect='equal')
+
+        # patrol area
         circle=plt.Circle((0,0),r_patrol,color='k',fill=False)
         self.fig.gca().add_artist(circle)
+
+        # IFU pickoff
+        circle_ifu=plt.Circle((0,0),r_ifu,color='gray',fill=False)
+        self.fig.gca().add_artist(circle_ifu)
 
         # arcs showing patrol regions for each probe
         theta_region = np.linspace(-theta_max,theta_max,num=50,endpoint=True)
@@ -756,6 +918,7 @@ class State(object):
         if self.title_str is not None:
             plt.title(self.title_str)
 
+
         # all animated elements are initialized here
         for i in range(len(self.probes)):
             p = self.probes[i]
@@ -769,7 +932,11 @@ class State(object):
         for s in self.stars:
             s.symbol, = self.ax.plot([], [], 'r*', markersize=10,zorder=101)
 
-        self.text = self.ax.text(0.8,0.9,'',transform=self.ax.transAxes)
+        # reconfig time
+        self.time_text = self.ax.text(0.8,0.9,'',transform=self.ax.transAxes)
+
+        # position if scrolling through starfield
+        self.pos_text = self.ax.text(0.01,0.01,'',transform=self.ax.transAxes)
 
         if self.plotlim is not None:
             plt.axis(self.plotlim)
@@ -778,7 +945,8 @@ class State(object):
         self.graphics_objects.extend([p.trail for p in self.probes])
         self.graphics_objects.extend([p.head for p in self.probes])
         self.graphics_objects.extend([s.symbol for s in self.stars])
-        self.graphics_objects.append(self.text)
+        self.graphics_objects.append(self.time_text)
+        self.graphics_objects.append(self.pos_text)
 
     def random_stars(self):
         """ Generate new random star positions """
@@ -821,7 +989,18 @@ class State(object):
                             star.x, star.y = pos
 
 
-    def select_probes(self):
+    def select_probes(self,probe_subset=None,star_vel=None,catalog_subset=None):
+        # Select a probe for each star:
+        #  - test all probe / star permuations
+        #  - reject invalid configurations
+        #  - of valid configurations, choose the best
+        #  - optionally only reconfigure a subset of the probes
+        #  - if star_vel provided, weight configs coming from that direction
+        #  - if catalog_subset provided, find best matches from catalog (> 3 stars)
+        #
+        # It is up to the caller to ensure that catalog_subset only contains
+        # stars not currently being tracked (i.e., ensure consistency with
+        # probe_subset)
 
         # Using predefined asterisms / configurations
         if self.aster and self.aster_select:
@@ -830,81 +1009,328 @@ class State(object):
                 s = self.stars[i]
                 p.star = s
             return True
-        # Select a probe for each star:
-        #  - test all probe / star permuations
-        #  - reject invalid configurations
-        #  - of valid configurations, choose the best
+        
+        probes_tracking = [] # indices of tracking probes
+        test_star_slots = []
+        if probe_subset:
+            # If only a subset of the probes are to be reconfigured, figure out
+            # which ones are still tracking
+            for i in range(len(self.probes)):
+                if i not in probe_subset:
+                    probes_tracking.append(i)
 
-        configs = [] # list of valid configs, will contain score
+            # Which star slots are pointed to by the probes to be reconfigured?
+            for i in probe_subset:
+                for j in range(len(self.stars)):
+                    if self.probes[i].star == self.stars[j]:
+                        test_star_slots.append(j)
 
-        # Remember old probe positions
-        old_xy = [(p.x,p.y) for p in self.probes]
+            # Are there any remaining star slots not pointed to by any of the
+            # probes?
+            for i in range(len(self.stars)):
+                s = self.stars[i]
+                if s not in [p.star for p in self.probes]:
+                    test_star_slots.append(i)
 
-        # Check all possible probe configurations
-        for probe_index in itertools.permutations(range(3),3):
-            #print 'config:', probe_index
+        else:
+            # All probes to be reconfigured
+            probe_subset=[0,1,2]
+            # All star slots are free
+            test_star_slots=[0,1,2]
 
-            # Test probe positions in this configuration
-            try:
-                for i in range(maxstars):
-                    s = self.stars[i]
-                    p = self.probes[probe_index[i]]
-                    p.set_cart(s.x,s.y)
-                    p.star = s
-            except ProbeLimitsException:
-                # Configuration exceeds probe actuator limits
-                #print "Exceed probe limits."
-                continue
+        if catalog_subset is None:
+            all_stars = self.stars
+        else:
+            # Only stars that aren't currently assigned should be in this
+            # catalog (i.e., it should be consistent with probe_subset)
+            all_stars = self.catalog_stars[catalog_subset]
+            for i in range(len(catalog_subset)):
+                # Calculate rel position for current OIWFS pointing
+                all_stars[i].xrel = all_stars[i].x - self.oiwfs_x0
+                all_stars[i].yrel = all_stars[i].y - self.oiwfs_y0
+                # Include the catalog index
+                all_stars[i].catindex = catalog_subset[i]
 
-            # Check for probe collisions (using minimum star distance as
-            # threshold) in this configuration
-            collides = False
-            for i in itertools.combinations(range(3),2):
-                #print "check config: (%i,%i)" % (i[0], i[1])
-                this_d,a,b = self.probes[i[0]].dist(self.probes[i[1]])
-                #print '     this_d=',this_d
-                if this_d < r_star:
-                    #print '  bad'
-                    collides = True
-                    break
-            if collides:
-                #print "collides"
-                continue
-            #print '  good'
+        # Remember old probe positions and stars
+        old_probe_xy = [(p.x,p.y) for p in self.probes]
+        old_star_xy = [(s.x,s.y) for s in self.stars]
+
+        # Set all probes to their star locations -- this is to facilitate
+        # configuration testing when only a subset are to be reconfigured
+        # since we care about the target config, not where probes are
+        # currently
+        for p in self.probes:
+            if p.star:
+                p.set_cart(p.star.x,p.star.y)
 
 
-            # Configuration is valid. Calculate figure of merit:
-            # - minimize maximum probe extension
-            merit = np.max(np.array([p.r for p in self.probes]))
+        configs = [] # list of valid configs, will contain merit for ranking
 
-            configs.append({'probes':probe_index, 'merit':merit})
+        if len(all_stars) < len(test_star_slots):
+            # If we don't have more stars than probes, we look
+            # at all the combinations. So, we add in some None stars
+            # so that we have at least enough for the number of probes,
+            # and any probe assigned None will have to be parked.
+            nExtra = len(test_star_slots)-len(all_stars)
+            all_stars = np.append(all_stars,[None]*nExtra)
 
-        # Return probes to old settings
+        # mapping from absolute probe number to
+        # index within the probe subset
+        subset_map = [None]*3
+        for i in range(len(probe_subset)):
+            subset_map[probe_subset[i]] = i
+
+        # Iterate over all test star subsets in all_stars
+        for test_stars in itertools.combinations(all_stars,len(test_star_slots)):
+
+            # Set star positions to test values
+            #for i in range(len(self.stars)):
+            for i in range(len(test_stars)):
+                test_star_slot = test_star_slots[i]
+
+                if test_stars[i] is not None:
+                    self.stars[test_star_slot].x = test_stars[i].xrel
+                    self.stars[test_star_slot].y = test_stars[i].yrel
+                    if test_stars[i].catindex == 40:
+                        pass
+                else:
+                    # No star for this slot
+                    self.stars[test_star_slot].x = None
+                    self.stars[test_star_slot].y = None
+            
+            # Check all possible configurations for probes being configured
+            for probe_index in itertools.permutations(probe_subset,len(probe_subset)):
+                #print 'config:', probe_index
+
+                probe_limits = []
+                probe_collisions = []
+                probe_vignette = []
+                
+                # Test probes in this configuration
+                for i in range(len(probe_index)):
+                    try:
+                        test_star_slot = test_star_slots[i]
+                        s = self.stars[test_star_slot]
+                        p = self.probes[probe_index[i]]
+                        if s.x is not None:
+                            if (probe_index[i]==1) and (s.catindex==64):
+                                pass
+                            p.set_cart(s.x,s.y)
+                            p.u_ifu()
+                            p.star = s
+                        else:
+                            # Park this probe
+                            p.set_cart(p.x_home,p.y_home)
+                            p.star = None
+                    except ProbeLimits:
+                        # Configuration exceeds probe actuator limits
+                        #print "Exceed probe limits."
+                        #continue
+                        probe_limits.append(probe_index[i])
+                    except ProbeVignetteIFU:
+                        probe_vignette.append(probe_index[i])
+
+                # Check for probe collisions (using minimum star distance as
+                # threshold) in this configuration. Note that we check all
+                # probes here, not just the subset being reconfigured.
+                #collides = False
+                for i in itertools.combinations(range(3),2):
+                    #print "check config: (%i,%i)" % (i[0], i[1])
+                    this_d,a,b = self.probes[i[0]].dist(self.probes[i[1]])
+                    #print '     this_d=',this_d
+                    if this_d < r_star:
+                        probe_collisions.append([i[0],i[1]]) # absolute probe indices
+                        #print '  bad'
+                        #collides = True
+                        #break
+                #if collides:
+                    #print "collides"
+                #    continue
+                #print '  good'
+
+                # Calculate figure of merit.
+                d = None # used to calculate merit. Array of distance units for 
+                         # probes to be reconfigured (same order as probe_subset)
+                if self.star_vel:
+                    # For non-sidereal tracking we want to choose
+                    # stars that are closer to the direction from which
+                    # they are moving into the field of view.
+                    #
+                    # We first calculate the equation for a line that
+                    # is tangent to the FOV circle on the side from
+                    # which the stars are coming, perpendicular to the
+                    # apparent velocity vector of those stars. We then calculate
+                    # the distance of the stars to that line.
+                    #
+                    # In the event that a probe exceeds its limits,
+                    # the merit is assigned a poor value, and
+                    # the probe in question is later parked.
+                    #
+                    # In the event of a collision, the merit is also
+                    # assigned a poor value. For the two probes involved in the collision,
+                    # the lower merit probe is parked.
+                    
+                    vx = self.star_vel[0]
+                    vy = self.star_vel[1]
+
+                    if vy == 0:
+                        # Stars are moving horizontally
+                        #merit = np.max(np.abs(np.array([-np.sign(vx)*r_patrol-self.probes[i].x for i in probe_subset])))
+                        d = np.abs(np.array([-np.sign(vx)*r_patrol-self.probes[i].x for i in probe_subset]))
+                    elif vx == 0:
+                        # Stars are moving vertically
+                        #merit = np.max(np.abs(np.array([-np.sign(vy)*r_patrol-self.probes[i].y for i in probe_subset])))
+                        d = np.abs(np.array([-np.sign(vy)*r_patrol-self.probes[i].y for i in probe_subset]))
+                    else:
+                        # Full solution. First solve for x, y values of the tangent
+                        # point to the circle along the line representing the
+                        # star velocity vector that goes through the origin
+                        xtan = -np.sign(vx)*np.sqrt(r_patrol**2 / ((vy/vx)**2+1))
+                        ytan = -np.sign(vy)*np.sqrt(r_patrol**2 / ((vx/vy)**2+1))
+
+                        # The tangent line has a slope orthogonal to velocity vector
+                        m = -vx/vy
+                        b = ytan - m*xtan
+
+                        #merit = np.max(np.array([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
+                        d = np.array(np.abs([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
+
+                    # set d to a large number if newly-configured probe in limit
+                    for i in probe_limits:
+                        d[subset_map[i]] = d_limit
+
+                    # set d to a large number of probe vignettes IFU pickoff
+                    for i in probe_vignette:
+                        d[subset_map[i]] = d_collided # just reuse value
+                    
+                    # set d of worst probe involved in collision to large number
+                    for c in probe_collisions:
+                        # Check if the first probe is in the reconfig subset
+                        if c[0] in probe_subset:
+                            # Check if the other probe is in the reconfig subset
+                            if c[1] in probe_subset:
+                                # Set the one with the larger d to a large number
+                                if d[subset_map[c[0]]] > d[subset_map[c[1]]]:
+                                    d[subset_map[c[0]]] = d_collided
+                                else:
+                                    d[subset_map[c[1]]] = d_collided
+                            else:
+                                # It isn't, so first probe large number
+                                d[subset_map[c[0]]] = d_collided 
+                        else:
+                            # It isn't so check if the second probe to be reconfiged
+                            if c[1] in probe_subset:
+                                # second probe large number
+                                d[subset_map[c[1]]] = d_collided
+                                
+
+                    # Merit is the sum of d (i.e., a bigger number is worse)
+                    merit = np.sum(d)
+
+                else:
+                    # otherwise we prefer configurations that minimize
+                    # the maximum probe extension
+                    d = np.array([self.probes[i].r for i in probe_subset])
+                    merit = np.max(d)
+
+                configs.append({
+                    'stars':test_stars,
+                    'probes':probe_index,
+                    'd':d,
+                    'merit':merit})
+
+        # Return probes and stars to old settings
         for i in range(len(self.probes)):
-            self.probes[i].set_cart(old_xy[i][0], old_xy[i][1])
+            self.probes[i].set_cart(old_probe_xy[i][0], old_probe_xy[i][1])
+        for i in range(len(self.stars)):
+            self.stars[i].x = old_star_xy[i][0]
+            self.stars[i].y = old_star_xy[i][1]
 
         # Select the best configuration
         min_merit = None
         best = None
+
         for c in configs:
+            # Loop over possible probe configurations
+            #print c
             if best is None:
                 best = c['probes']
                 min_merit = c['merit']
+                best_stars = c['stars']
+                best_d = c['d']
             elif c['merit'] < min_merit:
                 min_merit = c['merit']
                 best = c['probes']
-        if best is None:
-            return False
+                best_stars = c['stars']
+                best_d = c['d']
+    
+        if best is not None:            
+            # Check the d array to see if the probe is to be parked
+            # because it would be in a limit, or collide with another probe
+            for i in best:
+                p = self.probes[i] #[probe_subset[i]]
+                if (best_d[subset_map[i]] == d_limit) or (best_d[subset_map[i]] == d_collided):
+                    # Park because limit or collided
+                    p.park = True
+                    if p.star is not None:
+                        p.star.index = False
+                        p.star = None
+                else:
+                    # Assigned to star
+                    p.park = False
 
-        for i in range(maxstars):
-            # Update probes to include selected star references
-            p = self.probes[best[i]]
-            s = self.stars[i]
-            p.star = s
+            # Now assign the best star coordinates to the appropriate slot.
+            for i in range(len(test_stars)):
+                p = self.probes[best[i]]
+                if p.park == False:
+                    # We may have flagged it to park above
+
+                    test_star_slot = test_star_slots[i]
+                    s = self.stars[test_star_slot]
+                    
+                    if best_stars[i] is None:
+                        # this probe will actually be parked
+                        p.park = True
+                        p.star = None
+                    else:
+                        # Update star positions to best values
+                        s.x = best_stars[i].xrel
+                        s.y = best_stars[i].yrel
+
+                        # Record the catalog index of the star
+                        s.catindex = best_stars[i].catindex
+
+                        # Indicate that this catalog star is assigned
+                        self.catalog_assigned[s.catindex] = True
+
+                        # Update probes to include selected star references
+                        p.star = s
+        else:
+            # Couldn't find a star + probe assignment configuration. So,
+            # probes that were to be reconfigured are assigned None star
+            for i in probe_subset:
+                p = self.probes[i]
+                p.park = True
+                if p.star is not None:
+                    p.star.index = False
+                    p.star = None
+            return False
+ 
+    
+        # update which catalog stars assigned
+        #if catalog_subset is not None:
+        #    for s in best_stars:
+        #        self.catalog_assigned[s.index] = True
 
         for i in range(3):
             p = self.probes[i]
-            #print 'Select Probe',i,':',p.x,p.y,p.star.x,p.star.y
+            if p.star is None:
+                sTarg = Star(p.x_home,p.y_home)
+                sTarg.catindex = None
+            else:
+                sTarg = p.star
+
+            #print 'Select Probe',i,':',p.x,p.y,sTarg.x,sTarg.y,sTarg.catindex
 
         return True
 
@@ -972,8 +1398,18 @@ class State(object):
                     # 0. Origin at tip of probe_a, terminates at
                     # target star.
 
+                    if probe_a.star:
+                        aTarg = probe_a.star
+                    else:
+                        aTarg = Star(probe_a.x_home,probe_a.y_home)
+
+                    if probe_b.star:
+                        bTarg = probe_b.star
+                    else:
+                        bTarg = Star(probe_b.x_home,probe_b.y_home)
+
                     pt = Probe(probe_a.x, probe_a.y, 0, 0, r_head=0)
-                    (pt.x, pt.y) = (probe_a.star.x, probe_a.star.y)
+                    (pt.x, pt.y) = (aTarg.x, aTarg.y)
 
                     if info:
                         print "here: ",pt.x0,pt.y0,pt.x,pt.y,probe_b.x,probe_b.y
@@ -987,11 +1423,11 @@ class State(object):
                         # the correct vector orthogonal to the
                         # repulsive vector.
 
-                        s_r,s_theta = probe_b.cart2pol(probe_a.star.x,
-                                                       probe_a.star.y)
+                        s_r,s_theta = probe_b.cart2pol(aTarg.x,
+                                                       aTarg.y)
 
-                        t_r,t_theta = probe_b.cart2pol(probe_b.star.x,
-                                                       probe_b.star.y)
+                        t_r,t_theta = probe_b.cart2pol(bTarg.x,
+                                                       bTarg.y)
 
                         thetas = np.unwrap([s_theta,t_theta])
 
@@ -1033,10 +1469,77 @@ class State(object):
             probe_gradients[j]['grad_col'] = probe_gradients[j]['grad_col'] + \
                                              grad_j
 
-        # Now do the attractive potentials
+        # Repulsion due to IFU pickoff
         for i in range(3):
             probe = self.probes[i]
-            u,grad = probe.u_target(probe.star.x,probe.star.y)
+            u,grad = probe.u_ifu()
+            probe_gradients[i]['grad_ifu'] = grad
+
+            # Need a transverse component if moving the probe to its target
+            # would pass beyond the centre of the FOV
+            if self.use_tran and probe.star:
+                # Create a test probe with its origin at the current position
+                # of our probe.
+                pt = Probe(probe.x, probe.y, 0, 0, r_head=0)
+                
+                # Point the test probe at the origin of the real probe, the
+                # and the target star, and compare with the angle of the IFU
+                # (at the centre of the IFU). The the first two are on different
+                # sides of the IFU we will need a transverse component
+                
+                dist_origin,theta_origin=pt.cart2pol(probe.x0,probe.y0)
+                dist_targ,theta_targ=pt.cart2pol(probe.star.x,probe.star.y)
+                dist_ifu,theta_ifu=pt.cart2pol(0,0)
+
+                if (np.sign(unwind(theta_origin-theta_ifu)) != np.sign(unwind(theta_targ-theta_ifu))) and (dist_targ > dist_ifu):
+                    # Is the target a counter-clockwise (positive) or clockwise (negative)
+                    # rotation about the probe's origin? This lets us choose the correct
+                    # vector orthogonal to the repulsive gradient caused by the IFU.
+
+                    current_theta = probe.theta
+                    targ_r,targ_theta = probe.cart2pol(probe.star.x,probe.star.y)
+
+                    thetas = np.unwrap([current_theta,targ_theta])
+                    if thetas[1] > thetas[0]:
+                        # counter-clockwise
+                        grad_tran=np.array([grad[1],-grad[0]])
+                    else:
+                        # clockwise
+                        grad_tran=np.array([-grad[1],grad[0]])
+
+                    norm = np.linalg.norm(grad_tran)
+                    if norm < 0:
+                        raise ProbeVignetteIFU("Invalid norm target vector.")
+                    elif norm == 0:
+                        grad_tran = grad_tran * 0
+                    else:
+                        grad_tran = grad_tran/norm
+
+                    norm = self.tran_scale*np.linalg.norm(grad)
+                    if norm < 0:
+                        raise ProbeVignetteIFU("Invalid norm grad vector")
+
+                    if info:
+                        print a, b, np.degrees(thetas), \
+                            grad, grad_tran
+
+                    # Same magnitude as repulsive potential
+                    grad_tran = norm*grad_tran
+
+                    probe_gradients[i]['grad_ifu'] = probe_gradients[i]['grad_ifu'] + grad_tran
+
+        # Now do the attractive potentials
+        # If a probe isn't currently assigned to a star, point it toward its
+        # home position
+        for i in range(3):
+            probe = self.probes[i]
+
+            if probe.star:
+                sTarg = probe.star
+            else:
+                sTarg = Star(probe.x_home,probe.y_home)
+
+            u,grad = probe.u_target(sTarg.x,sTarg.y)
 
             #print "Attract",i,':',u,grad
 
@@ -1051,7 +1554,11 @@ class State(object):
         # they point, and update the probe velocities
         for i in range(3):
             p = self.probes[i]
-            s = p.star
+            if p.star:
+                s = p.star
+            else:
+                s = Star(p.x_home,p.y_home)
+
             theta = p.theta
             r = p.r
 
@@ -1065,9 +1572,18 @@ class State(object):
                     # If tracking moving stars, set probe positions to
                     # the target and continue to next probe to make
                     # animation smoother
-                    p.set_cart(s.x,s.y)
+
+                    old_x = p.x
+                    old_y = p.y
+                    try:   
+                        p.set_cart(s.x,s.y)
+                    except (ProbeLimits,ProbeCollision,ProbeVignetteIFU):
+                        # Can't go here so just revert the move for now. The invalid
+                        # target star will be caught elsewhere and trigger a reconfig
+                        p.set_cart(old_x,old_y)
                     p.trail_x.append(p.x)
                     p.trail_y.append(p.y)
+                
                 else:
                     # We're there, so stop moving
                     p.moving = None
@@ -1088,6 +1604,7 @@ class State(object):
                 # Otherwise figure out velocities from gradient
                 grad_cart = probe_gradients[i]['grad_col'] + \
                             probe_gradients[i]['grad_tran'] + \
+                            probe_gradients[i]['grad_ifu'] + \
                             probe_gradients[i]['grad_targ']
 
             grad = p.grad_pol(grad_cart)
@@ -1143,7 +1660,7 @@ class State(object):
                     # if pointing right at eachother
                     if p.r + p_nearest.r < d_clear:
                         print "Error: Don't know how to handle local minimum."
-                        sys.exit(1)
+                        #sys.exit(1)
 
                 dir = grad/norm
 
@@ -1154,7 +1671,7 @@ class State(object):
                     info = False
 
                     # Work out the accelerations, new velocities
-                    star_r, star_theta = p.cart2pol(p.star.x, p.star.y)
+                    star_r, star_theta = p.cart2pol(s.x, s.y)
 
                     delta_r = star_r - p.r
                     thetas = np.unwrap([p.theta,star_theta])
@@ -1184,10 +1701,13 @@ class State(object):
 
             # Try moving the probes
             p.moving = 'moving'
+            #old_x = p.x
+            #old_y = p.y
             try:
                 p.move()
-            except ProbeLimitsException:
-                # Asterism should be OK so let actuators hit the rails
+            except ProbeLimits:
+                # Can't go here so stay at old position
+                #p.set_cart(old_x,old_y)
                 continue
 
             # Update probe trails
@@ -1208,7 +1728,10 @@ class State(object):
     def animate(self, i, single=False):
 
         if self.fname: # and (self.vectors or self.contours):
-            print "Animate frame",i
+            print "Animate frame",i,"/",self.frames
+
+        #if i >= 1700:
+        #    pass
 
         objects = copy.copy(self.graphics_objects) # shallow copy
 
@@ -1222,33 +1745,141 @@ class State(object):
 
             update = True
 
+            # This is the absolute step in the simulation
+            sim_index = i*self.frameskip + frame
+
             if self.star_vel:
-                # Move stars if requested
-                for j in range(len(self.stars)):
-                    s = self.stars[j]
-                    p = self.probes[j]
-                    p.star = s
+                if self.catalog:
+                    # We're crab-walking through a catalog                
+                    
+                    # Move the visible stars. We do this first to ensure
+                    # that we're checking stars are at valid positions
+                    # before deciding on reconfigs
+                    for s in self.stars:
+                        if s.x is not None and s.y is not None:
+                            s.x = s.x + self.star_vel[0]*dt
+                            s.y = s.y + self.star_vel[1]*dt
 
-                    if s.x is None or s.y is None:
-                        s.x,s.y = self.aster[0][j]
+                    # The OIWFS pointing moves in the opposite sense of star_vel
+                    self.oiwfs_x0 = self.oiwfs_x0 - self.star_vel[0]*dt
+                    self.oiwfs_y0 = self.oiwfs_y0 - self.star_vel[1]*dt
 
-                    xnew = s.x + self.star_vel[0]*dt
-                    ynew = s.y + self.star_vel[1]*dt
+                    # Update text displaying postion
+                    self.pos_text.set_text('%8.5f,%8.5f (end=%8.5f,%8.5f) deg' % \
+                        (self.oiwfs_x0/(platescale*3600),\
+                        self.oiwfs_y0/(platescale*3600), \
+                        self.end_pos[0], \
+                        self.end_pos[1]) )
 
-                    r,theta=p.cart2pol(xnew,ynew)
+                    # Which stars are in the OIWFS patrol area
+                    star_dist = np.sqrt((self.catalog_x - self.oiwfs_x0)**2 + \
+                        (self.catalog_y - self.oiwfs_y0)**2)
+                    infield = np.where((star_dist <= r_patrol) & (self.catalog_assigned == False))[0]
 
-                    if (np.sqrt(xnew**2 + ynew**2) < r_patrol) and \
-                       (r < r_max):
-                        # Move star if within FOV
-                        s.x = xnew
-                        s.y = ynew
-                    else:
-                        # Otherwise switch to next star
-                        self.i_vaster[j] = (self.i_vaster[j]+1) % \
-                                            len(self.aster)
-                        s.x,s.y = self.aster[self.i_vaster[j]][j]
-                        p.trail_x = []
-                        p.trail_y = []
+                    # Initial assignment of stars
+                    if all(s.x is None for s in self.stars):
+                        success = self.select_probes(catalog_subset=infield)
+                        if not success:
+                            print("Could not establish starting config")
+                            sys.exit(1)
+
+                    # Probes tracking stars that are no longer valid targets
+                    # get flagged as needing reconfiguration.
+                    # Also, any probe not currently tracking a star is also
+                    # flagged.
+                    need_reconfig=[]  # which probes need reconfig
+                    for k in range(len(self.probes)):
+                        reconfig = False  # if current probe needs reconfig
+                        p = self.probes[k]
+                        if p.star is None:
+                            reconfig = True
+                        else:
+                            # If the star is no longer within the FOV we
+                            # need to reconfig
+                            reconfig = False
+                            this_star_dist = np.sqrt(p.star.x**2 + p.star.y**2)
+
+                            if this_star_dist > r_patrol:
+                                reconfig = True
+                            else:
+                                # try setting probe to current star position
+                                # and check for exceeding probe limits or
+                                # collisions, or vignetting the IFU
+                                old_x = p.x
+                                old_y = p.y
+
+                                try:
+                                    p.set_cart(p.star.x,p.star.y)
+                                    p.u_ifu()
+                                except ProbeLimits:
+                                    reconfig = True
+                                except ProbeCollision:
+                                    reconfig = True
+                                except ProbeVignetteIFU:
+                                    reconfig = True
+                                
+                                # revert position after test
+                                try:
+                                    p.set_cart(old_x,old_y)
+                                except ProbeLimits:
+                                    # hack
+                                    continue
+
+                        if reconfig:
+                            if p.star is not None:
+                                # can't move here so stop tracking
+                                self.catalog_assigned[p.star.catindex] = False
+                                p.star = None
+                            
+                            # Reset trail and flag for reconfig
+                            p.trail_x = []
+                            p.trail_y = []
+                            need_reconfig.append(k)
+                            #print("Here",k)
+
+                    # Perform reconfigs
+                    if need_reconfig:
+                        success = self.select_probes(probe_subset=need_reconfig, \
+                            catalog_subset=infield)
+                        #if not success:
+                        #    print("Could not reconfig probes")
+                        #    sys.exit(1)
+
+                    # Identify which stars are infield but not assigned so
+                    # that they can be plotted with a smaller symbol
+                    self.catalog_unassigned = infield[np.where(self.catalog_assigned[infield] == False)[0]]
+
+                    # Hacking to see if starfield moves, so no
+                    # probe movement.
+                    #update = False
+                    
+                else:
+                    # Moving several canned stars
+                    for j in range(len(self.stars)):
+                        s = self.stars[j]
+                        p = self.probes[j]
+                        p.star = s
+
+                        if s.x is None or s.y is None:
+                            s.x,s.y = self.aster[0][j]
+
+                        xnew = s.x + self.star_vel[0]*dt
+                        ynew = s.y + self.star_vel[1]*dt
+
+                        r,theta=p.cart2pol(xnew,ynew)
+
+                        if (np.sqrt(xnew**2 + ynew**2) < r_patrol) and \
+                        (r < r_max):
+                            # Move star if within FOV
+                            s.x = xnew
+                            s.y = ynew
+                        else:
+                            # Otherwise switch to next star
+                            self.i_vaster[j] = (self.i_vaster[j]+1) % \
+                                                len(self.aster)
+                            s.x,s.y = self.aster[self.i_vaster[j]][j]
+                            p.trail_x = []
+                            p.trail_y = []
 
             else:
                 # Select new stars if we're stopped
@@ -1268,7 +1899,7 @@ class State(object):
                     if self.dwell_count < self.dwell:
                         self.dwell_count = self.dwell_count + 1
                         if self.display:
-                            self.text.set_text('t='+str(self.move_time)+' s')
+                            self.time_text.set_text('t='+str(self.move_time)+' s')
                         update = False
 
                         if single:
@@ -1293,13 +1924,26 @@ class State(object):
                             print '   reconfig time:',self.move_time
                         self.move_time = 0
                         #print 'selected stars:', \
-                        #    [(p.star.x,p.star.y) for p in self.probes]
+                        #    [(s.x,s.y) for p in self.probes]
 
             # Hack: always draw stars second time this method is
             # called. Otherwise the first asterism will not be visible
             if ((i == 1) or self.star_vel) and self.display:
                 for s in self.stars:
                     s.update_symbol()
+
+            # Field stars (only draw last time through frameskip loop)
+            if (frame == (self.frameskip-1)) and self.catalog_unassigned.any():
+                 # Get coord of visible field stars relative to current OIWFS pointing
+                 field_x = np.array([s.x for s in self.catalog_stars[self.catalog_unassigned]])
+                 field_y = np.array([s.y for s in self.catalog_stars[self.catalog_unassigned]])
+                 field_x = field_x - self.oiwfs_x0
+                 field_y = field_y - self.oiwfs_y0
+
+                 if self.fieldstars_object:
+                     self.fieldstars_object.remove()
+                 self.fieldstars_object, = self.ax.plot(field_x, field_y, '*', color='orange', markersize=5,zorder=50)
+                 objects.append(self.fieldstars_object)
 
             # Move the probes
             if update:
@@ -1328,6 +1972,21 @@ class State(object):
                             self.vectors_object = self.plot_vectors()
                             objects.append(self.vectors_object)
 
+            # Record position data
+            if self.all_probe_coords is not None:
+                for j in range(len(self.probes)):
+                    p = self.probes[j]
+                    self.all_probe_coords[sim_index,j,:] = (p.x,p.y)
+
+                    if p.star is not None:
+                        self.all_probe_targs[sim_index,j,:] = (p.star.x,p.star.y)
+                    else:
+                        self.all_probe_targs[sim_index,j,:] = (None,None)
+
+                self.all_t[sim_index] = sim_index*dt
+                self.all_oiwfs_coords[sim_index,:] = (self.oiwfs_x0,self.oiwfs_y0)
+        
+
         # Return objects involved with animation
         return objects
 
@@ -1337,6 +1996,7 @@ class State(object):
         y_grid = []
         ut_grid = []
         uc_grid = []
+        ui_grid = []
         old_x,old_y = [self.p_ref.x,self.p_ref.y]
         for i in range(len(samples)):
             for j in range(len(samples)):
@@ -1347,8 +2007,15 @@ class State(object):
                     continue
                 else:
                     self.p_ref.x,self.p_ref.y=(x,y)
+                    if self.p_ref.star:
+                        sTarg = self.p_ref.star
+                    else:
+                        sTarg = Star(self.p_ref.x_home,self.p_ref.y_home)
 
-                    ut,gradt = self.p_ref.u_target(self.p_ref.star.x,self.p_ref.star.y)
+                    # Attractive potential
+                    ut,gradt = self.p_ref.u_target(sTarg.x,sTarg.y)
+
+                    # Collision potentials
                     try:
                         uc_o1,gradc_o1,P_o1,junk = self.p_ref.u_collision(self.p_o1)
                         uc_o2,gradc_o2,P_o2,junk = self.p_ref.u_collision(self.p_o2)
@@ -1356,8 +2023,15 @@ class State(object):
                     except:
                         uc_o = u_col_max
 
+                    # IFU potential
+                    try:
+                        ui,gradi = self.p_ref.u_ifu()
+                    except:
+                        ui = u_col_max
+
                     ut_grid.append(ut)
                     uc_grid.append(uc_o)
+                    ui_grid.append(ui)
                     x_grid.append(x)
                     y_grid.append(y)
 
@@ -1368,12 +2042,14 @@ class State(object):
         else:
             l = np.logspace(-1.5,0,30,endpoint=True)
 
-        u_grid = np.array(uc_grid)+np.array(ut_grid)
+        u_grid = np.array(uc_grid)+np.array(ut_grid)+np.array(ui_grid)
 
         if 'rep' in self.contours:
             cc = plt.tricontour(x_grid,y_grid,uc_grid,colors='r',levels=l)
         if 'att' in self.contours:
             ct = plt.tricontour(x_grid,y_grid,ut_grid,colors='g',levels=l)
+        if 'ifu' in self.contours:
+            ci = plt.tricontour(x_grid,y_grid,ui_grid,colors='b',levels=l)
         if 'tot' in self.contours:
             c = plt.tricontour(x_grid,y_grid,u_grid,colors='k',levels=l)
 
@@ -1511,7 +2187,7 @@ class MencoderFileWriter(animation.FileMovieWriter, MencoderBase):
 
 def run_sim(animate='cont',             # one of 'cont','track',None
             dwell=200,                  # Dwell time
-            contours=None,              # list of ['att','rep','tot']
+            contours=None,              # list of ['att','rep','ifu','tot']
             levels=None,                # levels for contours
             contour_steps=1,            # spatial resolution in mm
             vectors=None,               # list of ['att','rep','tran']
@@ -1520,6 +2196,8 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             aster=None,                 # sequence of predefined asterisms
             aster_select=False,         # use predefined star selection?
             aster_start=0,              # Start index in aster
+            catalog=None,               # Provide filename of star catalog (deg)
+            catalog_start=None,         # Starting OIWFS coordinates (deg)
             use_tran=True,              # use transverse component?
             tran_scale=3,               # strength of transverse component
             figsize=(5.5,5),            # figure size
@@ -1538,6 +2216,7 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             frameskip=1,                # Display 1/frameskip frames of ani
             fps=None,                   # fps for animation
             bitrate=3000,               # bitrate if animation to file
+            end_pos=None,               # Where simulation stops if star_vel
             star_vel=None               # move stars across focal plane
 ):
 
@@ -1563,16 +2242,20 @@ def run_sim(animate='cont',             # one of 'cont','track',None
               use_vel_servo=use_vel_servo,
               tran_scale=tran_scale,
               aster_start=aster_start,
+              catalog=catalog,
+              catalog_start=catalog_start,
               probe_cols=probe_cols,
               display=display,
               dwell=dwell,
               frameskip=frameskip,
+              frames=frames,
               plotlim=plotlim,
               contours=contours,
               contour_steps=contour_steps,
               i_ref=i_ref,
               levels=levels,
               vectors=vectors,
+              end_pos=end_pos,
               star_vel=star_vel)
 
     if animate == 'cont':
@@ -1582,21 +2265,34 @@ def run_sim(animate='cont',             # one of 'cont','track',None
         else:
             blit=False
 
+        if fps is None:
+            fps = 1/dt
+        
+        if fname is None:
+            interval = 0. # run at max speed possible on-screen
+        if fname is not None:
+            interval = 1./fps # for file writing
+
         ani = animation.FuncAnimation(s.fig, s.animate,
                                       blit=blit,
-                                      interval=0.,
-                                      frames=frames,
-                                      init_func=s.init_animation)
+                                      interval=interval,
+                                      frames=s.frames,
+                                      init_func=s.init_animation,
+                                      repeat=False)
 
         if fname is not None:
-            if fps is None:
-                fps = 1/dt
+
             #Writer = animation.writers['mencoder']
             #writer = Writer(fps=fps,metadata=dict(artist='Me'),bitrate=bitrate)
             #writer = MencoderWriter(fps=fps,metadata=dict(artist='Me'))
-            writer = MencoderFileWriter(fps=fps,metadata=dict(artist='Me'))
+            
+            # used to work back when SPIE paper written in 2016
+            #writer = MencoderFileWriter(fps=fps,metadata=dict(artist='Me'))
+            #ani.save(fname, writer=writer,fps=fps, dpi=dpi)
 
-            ani.save(fname, writer=writer,fps=fps, dpi=dpi)
+            # newer attempt with ffmpeg
+            writer = animation.FFMpegFileWriter(fps=fps,metadata=dict(artist='Me'))
+            ani.save(fname, writer=writer, dpi=dpi)
 
 
     elif animate == 'track':
@@ -1674,6 +2370,9 @@ def run_sim(animate='cont',             # one of 'cont','track',None
     else:
         plt.show()
 
+    # Return state so that we can check position stats
+    return s
+
 
 # Configure probes based on where the telescope is pointed, the IRIS
 # rotator position angle, and the coordinates of stars assigned to each
@@ -1686,8 +2385,9 @@ def run_sim(animate='cont',             # one of 'cont','track',None
 #   - if autoselect set, instead assign probes to supplied stars automatically
 #   - if the probe assignment is invalid, an exception will be thrown
 #     by the Probe.set_cart() calls:
-#     o ProbeLimitsException() if it is not within the Probe's patrol range
-#     o ProbeCollision()       if it would collide with another probe
+#     o ProbeLimits()       if it is not within the Probe's patrol range
+#     o ProbeCollision()    if it would collide with another probe
+#     o ProbeVignetteIFU()  if it would vignette the IFU pickoff
 def oiwfs_sky(pointing,         # [ra,dec,PA] in degrees
               stars,            # [[ra,dec],[ra,dec],[ra,dec] in degrees
               autoselect=False  # automatically select stars if True
@@ -1744,15 +2444,16 @@ def oiwfs_sky(pointing,         # [ra,dec,PA] in degrees
 if __name__ == '__main__':
 
     # Point OIWFS at a position on the sky.
-    oiwfs_sky([180.,1,10],
-              np.array([[180. + 0    ,1. + 0.006],
-                        [180. + 0.012,1. - 0.006],
-                        [180. - 0.012,1. - 0.006]]),
-              autoselect=False)
-    # sys.exit(1)
+    if False:
+        oiwfs_sky([180.,1,10],
+                np.array([[180. + 0    ,1. + 0.006],
+                            [180. + 0.012,1. - 0.006],
+                            [180. - 0.012,1. - 0.006]]),
+                autoselect=False)
+        # sys.exit(1)
 
     # animate a sequence of random reconfigurations, show on-screen
-    run_sim(animate='cont',display=True,dwell=50,frameskip=1)
+    #run_sim(animate='cont',display=True,dwell=50,frameskip=1)
 
     # animate a sequence of pre-selected asterisms, show on-screen
     #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
@@ -1769,20 +2470,46 @@ if __name__ == '__main__':
 
 
     # animated non-sidereal tracking, write to file
-    #run_sim(animate='cont',display=True,dwell=50,frameskip=1,
+    #run_sim(animate='cont',display=True,dwell=0,frameskip=1,
     #        plotlim=[-150,150,-150,150], star_vel=[0.5,2],
-    #        aster=aster_move,aster_select=True)#,
+    #        aster=aster_move,aster_select=True,
     #        fname='nonsidereal.mp4',fps=60,frames=3500,dpi=150)
     #sys.exit(1)
 
+
+    # animated non-sidereal tracking scrolling through catalog, show on-screen
+    if True:
+        s = run_sim(animate='cont',display=True,dwell=0,frameskip=1,
+                #plotlim=[-150,150,-150,150], star_vel=[-2,0],
+                #end_pos=[0.1,0],
+                end_pos=[0.05,0],
+                #end_pos=[0.33,0],
+                star_vel=[-1.0*platescale,0], # platescale in mm/arcsec
+                plotlim=[-150,150,-150,150], #star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
+                catalog='stripe.txt',catalog_start=[0,0], aster_select=False,
+                fname='nonsidereal.mp4',fps=60,dpi=150)
+
+        logdata={
+            'dt':dt,
+            'probe_coords':s.all_probe_coords,
+            'probe_targs':s.all_probe_targs,
+            'oiwfs_coords':s.all_oiwfs_coords,
+            't':s.all_t
+        }
+        np.savez('simulation_1.0arcsec_per_sec.npz',**logdata)
+        #np.savez('simulation.npz',**logdata)
+        
+        # We get here after the plot is closed
+        sys.exit(1)
 
     # --- Series of figures for SPIE paper --------------------------------
     #figtype = 'pdf'
     figtype = 'png'
 
     # overview plot
-    run_sim(animate=None,aster=aster_easy,aster_select=True,
-            aster_start=8,figsize=(5.5,5),dpi=150,fname='model.'+figtype)
+    if False:
+        run_sim(animate=None,aster=aster_easy,aster_select=True,
+                aster_start=8,figsize=(5.5,5),dpi=150,fname='model.'+figtype)
 
     # show contours for normal situation
     plotlim=[-150,150,-150,150]
@@ -1791,69 +2518,76 @@ if __name__ == '__main__':
     levels = np.logspace(-1.8,0.2,40,endpoint=True)
     aster = [[ (-65,7), (-35,-15), (70,0) ]]
     startpos={'1':[-100,50]}
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='attract.'+figtype,plotlim=plotlim,
-            i_ref=1, contours=['att'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='components.'+figtype,plotlim=plotlim,
-            i_ref=1, contours=['att','rep'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='attract.'+figtype,plotlim=plotlim,
+                i_ref=1, contours=['att'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='total.'+figtype,plotlim=plotlim,
-            i_ref=1, contours=['tot'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='components.'+figtype,plotlim=plotlim,
+                i_ref=1, contours=['att','rep','ifu'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps)
 
-    # contours when there is a local minimum
-    aster = [[ (0,50), (10,-65), (-35,-105) ]]
-    startpos={'2':[-18,-20]}
-    plotlim=[-90,40,-140,10]
-    #contour_steps = 1
-    levels = np.logspace(-3,0.0,60,endpoint=True)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='total.'+figtype,plotlim=plotlim,
+                i_ref=1, contours=['tot'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps)
 
-    annotations = [ ('Rectangle',
-                     {'args': [(-28,-41),30,12],
-                      'kargs': {'angle': -20,
-                                'color': 'm',
-                                'fill' : False}})
-                ]
+        # contours when there is a local minimum
+        aster = [[ (0,50), (10,-65), (-35,-105) ]]
+        startpos={'2':[-18,-20]}
+        plotlim=[-90,40,-140,10]
+        #contour_steps = 1
+        levels = np.logspace(-3,0.0,60,endpoint=True)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='localmin.'+figtype,
-            i_ref=2, contours=['tot'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps,
-            plotlim=plotlim,title_str='(a) Scalar Potential',
-            annotations=annotations)
+        annotations = [ ('Rectangle',
+                        {'args': [(-28,-41),30,12],
+                        'kargs': {'angle': -20,
+                                    'color': 'm',
+                                    'fill' : False}})
+                    ]
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='localmin.'+figtype,
+                i_ref=2, contours=['tot'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps,
+                plotlim=plotlim,title_str='(a) Scalar Potential',
+                annotations=annotations)
 
     # vector field plots
     #contour_steps=1
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='vect_basic.'+figtype,
-            i_ref=2, vectors=['att','rep'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps,
-            plotlim=plotlim, title_str='(b) Gradient Field',
-            annotations=annotations)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='vect_basic.'+figtype,
+                i_ref=2, vectors=['att','rep'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps,
+                plotlim=plotlim, title_str='(b) Gradient Field',
+                annotations=annotations)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='vect_tran.'+figtype,
-            i_ref=2, vectors=['tran'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps,
-            plotlim=plotlim, title_str='(c) Transverse Component',
-            annotations=annotations)
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='vect_tran.'+figtype,
+                i_ref=2, vectors=['tran'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps,
+                plotlim=plotlim, title_str='(c) Transverse Component',
+                annotations=annotations)
+    
+    if False:
+        run_sim(animate=None,aster=aster,aster_select=True,
+                aster_start=0,fname='vect_tot.'+figtype,
+                i_ref=2, vectors=['att','rep','tran'], levels=levels,
+                startpos=startpos, contour_steps=contour_steps,
+                plotlim=plotlim, title_str='(d) Total Vector Field',
+                annotations=annotations)
 
-    run_sim(animate=None,aster=aster,aster_select=True,
-            aster_start=0,fname='vect_tot.'+figtype,
-            i_ref=2, vectors=['att','rep','tran'], levels=levels,
-            startpos=startpos, contour_steps=contour_steps,
-            plotlim=plotlim, title_str='(d) Total Vector Field',
-            annotations=annotations)
-
-
-    # Show some re-configurations
-    plotlim=[-150,150,-150,150]
-    for i in range(4):
-        run_sim(animate='track',aster=aster_seq,aster_select=True,
-                aster_start=i,fname='reconfig%i.%s' % (i,figtype),
-                plotlim=plotlim)
+    if False:
+        # Show some re-configurations
+        plotlim=[-150,150,-150,150]
+        for i in range(4):
+            run_sim(animate='track',aster=aster_seq,aster_select=True,
+                    aster_start=i,fname='reconfig%i.%s' % (i,figtype),
+                    plotlim=plotlim)
