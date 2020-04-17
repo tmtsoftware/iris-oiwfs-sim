@@ -9,6 +9,10 @@ import numpy as np
 import oiwfs_sim
 import matplotlib.pyplot as plt
 
+# --------------------------------------------------------------------------
+# Modifiable parameters
+# --------------------------------------------------------------------------
+
 # Establish the mean surface density of guide stars as a number of stars
 # per 2'-diameter NFIRAOS circular FOV
 num_per_FOV = 3.5
@@ -18,8 +22,16 @@ density_perarcminsq = num_per_FOV/FOV_area_arcminsq
 # number of Monte Carlo simulations
 nmc = 1000
 
+# Avoid the imager?
+avoidImager = True
+
+# --------------------------------------------------------------------------
+# Start simulation
+# --------------------------------------------------------------------------
+
 # Create OIWFS State object
 s = oiwfs_sim.State(None)
+print "Are we avoiding the imager  :",avoidImager
 
 # Outer loop over MC simulations
 results = []
@@ -40,7 +52,7 @@ for i in range(nmc):
     s.init_catalog(x_deg,y_deg)
 
     # try assigning probes to stars
-    s.select_probes(catalog_subset=range(len(s.catalog_stars)))
+    s.select_probes(catalog_subset=range(len(s.catalog_stars)), avoidImager=avoidImager)
     #for p in s.probes:
     #    if p.star is not None:
     #        # Shouldn't be necessary but may catch an error
@@ -54,6 +66,7 @@ results = np.array(results)
 
 print "Done:"
 for i in range(4):
-    percent = 100.*np.sum(results[:,1]==i)/float(nmc)
-    print "%i stars %.1f %%" % (i,percent)
+    num = np.sum(results[:,1]==i)
+    percent = 100.*num/float(nmc)
+    print "%i stars %i/%i = %.1f %%" % (i,num,nmc,percent)
 

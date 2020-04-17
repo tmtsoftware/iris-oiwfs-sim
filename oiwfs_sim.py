@@ -23,14 +23,16 @@ import random
 # Constants
 platescale    = 2.182   # platescale in OIWFS plane (mm/arcsec)
 r_patrol      = 60*platescale # radius of the patrol area in (mm)
-r_max         = 330         # maximum extension of probes (mm)
-r_overshoot   = 5           # distance by which probes overshoot centre (mm)
+r_overshoot   = 20      # distance by which probes overshoot centre (mm)
+r_max         = 332.12+r_overshoot # maximum extension of probes (mm)
 r_head        = 15.606/2.   # circumscribe rectangular head (mm)
 r_min         = r_patrol    # minimum extension of probes (mm)
 r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
 r0            = r_max-r_patrol # initial/parked probe extension (mm)
-maxstars      = 3     # maximum number of stars
+maxstars      = 3           # maximum number of stars
 r_ifu         = 6.3*platescale # radius of region to avoid for IFU (mm)
+width_imager  = 34*platescale  # width of imager footprint
+height_imager = 34*platescale  # width of imager footprint
 
 vmax = 13.2
 vr_max        = vmax #vmax/np.sqrt(2)
@@ -89,9 +91,10 @@ print "    Maximum probe extension:",r_max,"mm"
 print "                   Overshoot:",r_overshoot,"mm"
 print "           Probe head radius:",r_head,"mm"
 print "IFU Pickoff avoidance radius:",r_ifu,"mm"
-
-print "Max speed linear stage:",vr_max,"mm/s"
-print "Max speed rotary stage:",vt_max,"rad/s"
+print "                Imager width:",width_imager,"mm"
+print "               Imager height:",height_imager,"mm"
+print "      Max speed linear stage:",vr_max,"mm/s"
+print "      Max speed rotary stage:",vt_max,"rad/s"
 
 #sys.exit(1)
 
@@ -251,6 +254,10 @@ class ProbeCollision(Exception):
 class ProbeVignetteIFU(Exception):
     pass
 
+# Exception class for probe vignetting Imager
+class ProbeVignetteImager(Exception):
+    pass
+
 # Calculate acceleration along axis to reach target
 def calc_accel( x, v, v_target, delta_x, amax, info=False ):
     """ Figure out acceleration
@@ -376,12 +383,14 @@ class Probe(object):
         # Set if probe is parked/parking
         self.park = False
 
-    def set_cart(self, x, y):
+    def set_cart(self, x, y, avoidImager=False):
         """ Set probe tips to new x, y location """
         self.x = x
         self.y = y
         self.r, self.theta = self.cart2pol(self.x, self.y)
         self.check_ranges()
+        if avoidImager:
+            self.check_imagerVignette()
 
     def set_pol(self, r, theta):
         """ Set probe tips to new r, theta location """
@@ -535,6 +544,10 @@ class Probe(object):
         if out_of_range:
             self.x, self.y = self.pol2cart(self.r, self.theta)
             raise ProbeLimits(errstr)
+
+    def check_imagerVignette(self):
+        if (abs(self.x) < width_imager/2) and (abs(self.y) < height_imager/2):
+            raise ProbeVignetteImager
 
     def move(self):
         """ Perform one step of the motion integration """
@@ -1016,7 +1029,7 @@ class State(object):
                             star.x, star.y = pos
 
 
-    def select_probes(self,probe_subset=None,star_vel=None,catalog_subset=None):
+    def select_probes(self,probe_subset=None,star_vel=None,catalog_subset=None,avoidImager=True):
         # Select a probe for each star:
         #  - test all probe / star permuations
         #  - reject invalid configurations
@@ -1024,6 +1037,7 @@ class State(object):
         #  - optionally only reconfigure a subset of the probes
         #  - if star_vel provided, weight configs coming from that direction
         #  - if catalog_subset provided, find best matches from catalog (> 3 stars)
+        #  - if avoidImager set, don't allow stars that vignette the imager
         #
         # It is up to the caller to ensure that catalog_subset only contains
         # stars not currently being tracked (i.e., ensure consistency with
@@ -1141,7 +1155,7 @@ class State(object):
                         if s.x is not None:
                             if (probe_index[i]==1) and (s.catindex==64):
                                 pass
-                            p.set_cart(s.x,s.y)
+                            p.set_cart(s.x,s.y,avoidImager=avoidImager)
                             p.u_ifu()
                             p.star = s
                         else:
@@ -1154,6 +1168,8 @@ class State(object):
                         #continue
                         probe_limits.append(probe_index[i])
                     except ProbeVignetteIFU:
+                        probe_vignette.append(probe_index[i])
+                    except ProbeVignetteImager:
                         probe_vignette.append(probe_index[i])
 
                 # Check for probe collisions (using minimum star distance as
