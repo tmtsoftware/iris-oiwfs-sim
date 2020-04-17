@@ -720,7 +720,7 @@ class State(object):
                  use_vel_servo=False,
                  tran_scale=3,
                  aster_start=0,
-                 catalog=None,
+                 catalogfile=None,
                  catalog_start=None,
                  probe_cols=['b','b','b'],
                  display=True,
@@ -790,12 +790,12 @@ class State(object):
         self.star_vel=star_vel
         self.end_pos=end_pos
 
-        if catalog is not None:
+        if catalogfile is not None:
             # File is assumed to consist of x, y columns of positions
             # in degrees. Also assume that they are at a low Dec. So
             # just convert directly into mm offsets using platescale
-            self.catalog = catalog
-            self.catalog_xdeg, self.catalog_ydeg = np.loadtxt(catalog,unpack=True)
+            self.catalogfile = catalogfile
+            self.catalog_xdeg, self.catalog_ydeg = np.loadtxt(catalogfile,unpack=True)
             self.catalog_x = self.catalog_xdeg*3600*platescale  # mm
             self.catalog_y = self.catalog_ydeg*3600*platescale  # mm
             self.catalog_stars = np.array([Star(self.catalog_x[i],self.catalog_y[i]) for i in range(len(self.catalog_x))])
@@ -1749,7 +1749,7 @@ class State(object):
             sim_index = i*self.frameskip + frame
 
             if self.star_vel:
-                if self.catalog:
+                if self.catalogfile:
                     # We're crab-walking through a catalog                
                     
                     # Move the visible stars. We do this first to ensure
@@ -2196,7 +2196,7 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             aster=None,                 # sequence of predefined asterisms
             aster_select=False,         # use predefined star selection?
             aster_start=0,              # Start index in aster
-            catalog=None,               # Provide filename of star catalog (deg)
+            catalogfile=None,           # Provide filename of star catalog (deg)
             catalog_start=None,         # Starting OIWFS coordinates (deg)
             use_tran=True,              # use transverse component?
             tran_scale=3,               # strength of transverse component
@@ -2242,7 +2242,7 @@ def run_sim(animate='cont',             # one of 'cont','track',None
               use_vel_servo=use_vel_servo,
               tran_scale=tran_scale,
               aster_start=aster_start,
-              catalog=catalog,
+              catalogfile=catalogfile,
               catalog_start=catalog_start,
               probe_cols=probe_cols,
               display=display,
@@ -2486,7 +2486,7 @@ if __name__ == '__main__':
                 #end_pos=[0.33,0],
                 star_vel=[-1.0*platescale,0], # platescale in mm/arcsec
                 plotlim=[-150,150,-150,150], #star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
-                catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
+                catalogfile='stripe.txt',catalog_start=[0,0], aster_select=False)#,
                 #fname='nonsidereal.mp4',fps=60,dpi=150)  # uncomment to write animation to file
 
         logdata={
