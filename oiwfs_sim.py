@@ -720,6 +720,8 @@ class State(object):
                  use_vel_servo=False,
                  tran_scale=3,
                  aster_start=0,
+                 catalog_xdeg=None,
+                 catalog_ydeg=None,
                  catalogfile=None,
                  catalog_start=None,
                  probe_cols=['b','b','b'],
@@ -790,36 +792,21 @@ class State(object):
         self.star_vel=star_vel
         self.end_pos=end_pos
 
+        if catalog_xdeg is not None and self.catalog_ydeg is not None:
+            self.catalog_xdeg = catalog_xdeg
+            self.catalog_ydeg = catalog_ydeg
+        else:
+            self.catalog_xdeg = None
+            self.catalog_ydeg = None
+
         if catalogfile is not None:
             # File is assumed to consist of x, y columns of positions
-            # in degrees. Also assume that they are at a low Dec. So
-            # just convert directly into mm offsets using platescale
+            # in degrees.
             self.catalogfile = catalogfile
             self.catalog_xdeg, self.catalog_ydeg = np.loadtxt(catalogfile,unpack=True)
-            self.catalog_x = self.catalog_xdeg*3600*platescale  # mm
-            self.catalog_y = self.catalog_ydeg*3600*platescale  # mm
-            self.catalog_stars = np.array([Star(self.catalog_x[i],self.catalog_y[i]) for i in range(len(self.catalog_x))])
-            for i in range(len(self.catalog_stars)):
-                self.catalog_stars[i].index = i # hack
-            self.catalog_assigned = np.array([False]*len(self.catalog_x))
-            self.catalog_unassigned = []
-            self.fieldstars_object = None
 
-            if self.star_vel is not None and self.end_pos is None:
-                # If no end_pos given, guess one from the velocity vector
-                # and the extent of the catalog. Note that the
-                # velocity vector is the opposite of the direction of
-                # travel because we scroll the stars in front of the
-                # OIWFS, hence the sign negations.
-                if -np.sign(self.star_vel[0]) == 1:
-                    end_pos_x = np.max(self.catalog_xdeg)
-                else:
-                    end_pos_x = np.min(self.catalog_xdeg)
-                if -np.sign(self.star_vel[1]) == 1:
-                    end_pos_y = np.max(self.catalog_ydeg)
-                else:
-                    end_pos_y = np.min(self.catalog_ydeg)
-                self.end_pos=(end_pos_x,end_pos_y)
+        # Does nothing is catalog_xdeg/ydeg undefined
+        self.init_catalog(self.catalog_xdeg,self.catalog_ydeg)
 
         if self.end_pos is not None and self.star_vel is not None and self.frames is None:
             # Calculate the number of frames that gets us to the
@@ -870,6 +857,41 @@ class State(object):
             self.p_ref = None
             self.p_o1 = None
             self.p_o2 = None
+
+    def init_catalog(self, catalog_xdeg, catalog_ydeg):
+        # Initialize/update catalog
+        if self.catalog_xdeg is None or catalog_ydeg is None:
+            return
+        self.catalog_xdeg = catalog_xdeg
+        self.catalog_ydeg = catalog_ydeg
+
+        # Assume that coordinates at a low Dec. So
+        # just convert directly into mm offsets using platescale
+        self.catalog_x = self.catalog_xdeg*3600*platescale  # mm
+        self.catalog_y = self.catalog_ydeg*3600*platescale  # mm
+        self.catalog_stars = np.array([Star(self.catalog_x[i],self.catalog_y[i]) for i in range(len(self.catalog_x))])
+        for i in range(len(self.catalog_stars)):
+            self.catalog_stars[i].index = i # hack
+        self.catalog_assigned = np.array([False]*len(self.catalog_x))
+        self.catalog_unassigned = []
+        self.fieldstars_object = None
+
+        if self.star_vel is not None and self.end_pos is None:
+            # If no end_pos given, guess one from the velocity vector
+            # and the extent of the catalog. Note that the
+            # velocity vector is the opposite of the direction of
+            # travel because we scroll the stars in front of the
+            # OIWFS, hence the sign negations.
+            if -np.sign(self.star_vel[0]) == 1:
+                end_pos_x = np.max(self.catalog_xdeg)
+            else:
+                end_pos_x = np.min(self.catalog_xdeg)
+            if -np.sign(self.star_vel[1]) == 1:
+                end_pos_y = np.max(self.catalog_ydeg)
+            else:
+                end_pos_y = np.min(self.catalog_ydeg)
+            self.end_pos=(end_pos_x,end_pos_y)
+
 
     def plot_init(self):
         """ Initialize the OIWFS plot """
@@ -2196,6 +2218,8 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             aster=None,                 # sequence of predefined asterisms
             aster_select=False,         # use predefined star selection?
             aster_start=0,              # Start index in aster
+            catalog_xdeg=None,          # x-catalog coordinates in deg
+            catalog_ydeg=None,          # y-catalog coordinates in deg
             catalogfile=None,           # Provide filename of star catalog (deg)
             catalog_start=None,         # Starting OIWFS coordinates (deg)
             use_tran=True,              # use transverse component?
