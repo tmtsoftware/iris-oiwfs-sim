@@ -85,6 +85,11 @@ d_collided = 20*r_patrol # distance for merit calc if probe collides in configur
 # max value of collision potential
 u_col_max     = 0.5*alpha*(1/col_min - 1/tol_avoid)**alpha
 
+print "    Maximum probe extension:",r_max,"mm"
+print "                   Overshoot:",r_overshoot,"mm"
+print "           Probe head radius:",r_head,"mm"
+print "IFU Pickoff avoidance radius:",r_ifu,"mm"
+
 print "Max speed linear stage:",vr_max,"mm/s"
 print "Max speed rotary stage:",vt_max,"rad/s"
 

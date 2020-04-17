@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# This script implements a Monte Carlo distribution to test the
+# This script implements a Monte Carlo simulation to test the
 # frequency of usable fields given modeled OIWFS probe geometries,
 # while avoiding the IRIS image/IFU pickoffs, and given a surface
 # density of potential guide stars.
@@ -16,7 +16,7 @@ FOV_area_arcminsq = np.pi*(1.)**2.
 density_perarcminsq = num_per_FOV/FOV_area_arcminsq
 
 # number of Monte Carlo simulations
-nmc = 100
+nmc = 1000
 
 # Create OIWFS State object
 s = oiwfs_sim.State(None)
@@ -54,5 +54,6 @@ results = np.array(results)
 
 print "Done:"
 for i in range(4):
-    print "%i stars %.1f %%" % (i,np.sum(results[:,1]==i))
+    percent = 100.*np.sum(results[:,1]==i)/float(nmc)
+    print "%i stars %.1f %%" % (i,percent)
 
