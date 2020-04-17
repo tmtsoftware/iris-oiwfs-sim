@@ -2486,8 +2486,8 @@ if __name__ == '__main__':
                 #end_pos=[0.33,0],
                 star_vel=[-1.0*platescale,0], # platescale in mm/arcsec
                 plotlim=[-150,150,-150,150], #star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
-                catalog='stripe.txt',catalog_start=[0,0], aster_select=False,
-                fname='nonsidereal.mp4',fps=60,dpi=150)
+                catalog='stripe.txt',catalog_start=[0,0], aster_select=False)#,
+                #fname='nonsidereal.mp4',fps=60,dpi=150)  # uncomment to write animation to file
 
         logdata={
             'dt':dt,

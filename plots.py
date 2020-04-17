@@ -12,12 +12,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 #logfile='simulation.npz'
-#logfile='simulation_2mm_per_sec.npz'
-#logfile='simulation_0.1arcmin_per_sec.npz'
-#logfile='simulation_0.1arcsec_per_sec.npz'
-#logfile='simulation_0.1arcsec_per_sec_trunc.npz'
+
+logfile='simulation_0.1arcsec_per_sec.npz'
 #logfile='simulation_0.5arcsec_per_sec.npz'
-logfile='simulation_1.0arcsec_per_sec.npz'
+#logfile='simulation_1.0arcsec_per_sec.npz'
 
 logdata = np.load(logfile)
 t = logdata['t']
@@ -127,7 +125,6 @@ movingtimes = np.array(movingtimes)
 movingtimes=movingtimes[movingtimes<100]
 
 # Calculate how many probes on-target (active in AO) over time
-
 ontarget = all_state==0
 numactive = np.sum(ontarget,axis=1)
 
@@ -141,41 +138,74 @@ for i in range(4):
 # Traverse numactive and figure out how long each configuration is
 # stable
 config_times = []
+config_times_by_stars = [[],[],[],[]]
 startactive=numactive[0]
 for i in range(1,n):
     if numactive[i] != numactive[i-1]:
         # configuration has changed. Record time.
         config_time = (i-startactive)*dt
         config_times.append(config_time)
+        config_times_by_stars[numactive[i-1]].append(config_time)
         startactive=i
 config_times = np.array(config_times)
+config_times_by_stars = np.array(config_times_by_stars)
 
 config_mean = np.mean(config_times)
 parked_mean = np.mean(parkedtimes)
 moving_mean = np.mean(movingtimes)
 ontarget_mean = np.mean(ontargettimes)
 
-
 print "Means:\nstable config (all probes) %f s\nparked %f s\nmoving %f s\nontarget %f s" % \
     (config_mean, parked_mean, moving_mean, ontarget_mean)
     
+# Histogram showing distribution of time spent tracking broken down by number of probes
+fig = plt.figure(figsize=(8,5))
+ax = fig.add_subplot(1,1,1)
+bins = np.linspace(0,np.max(ontargettimes),num=20)
+binsize=bins[1]-bins[0]
+bincen = (bins[1:]+bins[:-1])/2.
+
+rects = []
+labels = []
+
+for i in range(len(config_times_by_stars)):
+    d = config_times_by_stars[i]
+    l = '%i stars, %i occurrences ($\mu$=%.1fs)' % (i,len(d),np.mean(d))
+    labels.append(l)
+
+    h = np.histogram(d,bins,density=True)
+
+    rect = ax.bar(
+                bincen + i*binsize/4 - 2*binsize/4,
+                h[0],
+                width=binsize/5.,
+                color=colors[i],
+                linewidth=0)
+    rects.append(rect[0])
+
+ax.legend(rects, labels)
+ax.set_xlabel('Time (s)')
+ax.set_ylabel('Density')
+plt.title('Time distributions in stable config by number of stars')
+#plt.ylim((-10,250))
+plt.show()
+plt.close()
+
+# Histogram showing distribution of time moving / parked / stable tracking config
+fig = plt.figure(figsize=(8,5))
+ax = fig.add_subplot(1,1,1)
+bins = np.linspace(0,np.max(ontargettimes),num=20)
+binsize=bins[1]-bins[0]
+bincen = (bins[1:]+bins[:-1])/2.
+
 rects = []
 labels = [
     'all probes stable config ($\mu$=%.1fs)' % config_mean,
     'probe parked ($\mu$=%.1fs)' % parked_mean,
     'probe moving ($\mu$=%.1fs)' % moving_mean,
     'probe ontarget ($\mu$=%.1fs)' % ontarget_mean]
+
 data = (config_times,parkedtimes,movingtimes,ontargettimes)
-
-fig = plt.figure(figsize=(8,5))
-ax = fig.add_subplot(1,1,1)
-
-#binsize=10.
-#bins = np.arange(0,np.max(ontargettimes),step=binsize)
-bins = np.linspace(0,np.max(ontargettimes),num=20)
-binsize=bins[1]-bins[0]
-bincen = (bins[1:]+bins[:-1])/2.
-
 for i in range(4):
     d = data[i]
     l = labels[i]
@@ -191,9 +221,6 @@ for i in range(4):
     rects.append(rect[0])
 
 ax.legend(rects, labels)
-
-#ax.hist(config_times,100)
-
 ax.set_xlabel('Time (s)')
 ax.set_ylabel('Density')
 plt.title('Time distributions (sim length=%.1fhr, %i reconfigs)' % (t[-1]/3600,len(config_times)))
