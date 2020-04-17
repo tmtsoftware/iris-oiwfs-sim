@@ -860,7 +860,7 @@ class State(object):
 
     def init_catalog(self, catalog_xdeg, catalog_ydeg):
         # Initialize/update catalog
-        if self.catalog_xdeg is None or catalog_ydeg is None:
+        if catalog_xdeg is None or catalog_ydeg is None:
             return
         self.catalog_xdeg = catalog_xdeg
         self.catalog_ydeg = catalog_ydeg
@@ -1085,7 +1085,6 @@ class State(object):
             if p.star:
                 p.set_cart(p.star.x,p.star.y)
 
-
         configs = [] # list of valid configs, will contain merit for ranking
 
         if len(all_stars) < len(test_star_slots):
@@ -1183,14 +1182,6 @@ class State(object):
                     # which the stars are coming, perpendicular to the
                     # apparent velocity vector of those stars. We then calculate
                     # the distance of the stars to that line.
-                    #
-                    # In the event that a probe exceeds its limits,
-                    # the merit is assigned a poor value, and
-                    # the probe in question is later parked.
-                    #
-                    # In the event of a collision, the merit is also
-                    # assigned a poor value. For the two probes involved in the collision,
-                    # the lower merit probe is parked.
                     
                     vx = self.star_vel[0]
                     vy = self.star_vel[1]
@@ -1214,46 +1205,50 @@ class State(object):
                         m = -vx/vy
                         b = ytan - m*xtan
 
-                        #merit = np.max(np.array([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
                         d = np.array(np.abs([dist_line_point(m,b,self.probes[i]) for i in probe_subset]))
-
-                    # set d to a large number if newly-configured probe in limit
-                    for i in probe_limits:
-                        d[subset_map[i]] = d_limit
-
-                    # set d to a large number of probe vignettes IFU pickoff
-                    for i in probe_vignette:
-                        d[subset_map[i]] = d_collided # just reuse value
-                    
-                    # set d of worst probe involved in collision to large number
-                    for c in probe_collisions:
-                        # Check if the first probe is in the reconfig subset
-                        if c[0] in probe_subset:
-                            # Check if the other probe is in the reconfig subset
-                            if c[1] in probe_subset:
-                                # Set the one with the larger d to a large number
-                                if d[subset_map[c[0]]] > d[subset_map[c[1]]]:
-                                    d[subset_map[c[0]]] = d_collided
-                                else:
-                                    d[subset_map[c[1]]] = d_collided
-                            else:
-                                # It isn't, so first probe large number
-                                d[subset_map[c[0]]] = d_collided 
-                        else:
-                            # It isn't so check if the second probe to be reconfiged
-                            if c[1] in probe_subset:
-                                # second probe large number
-                                d[subset_map[c[1]]] = d_collided
-                                
-
-                    # Merit is the sum of d (i.e., a bigger number is worse)
-                    merit = np.sum(d)
-
+                   
                 else:
                     # otherwise we prefer configurations that minimize
-                    # the maximum probe extension
+                    # probe extension
                     d = np.array([self.probes[i].r for i in probe_subset])
-                    merit = np.max(d)
+
+                # In the event that a probe exceeds its limits or vignettes,
+                # the merit is assigned a poor value, and
+                # the probe in question is later parked.
+    
+                # set d to a large number if newly-configured probe in limit
+                for i in probe_limits:
+                    d[subset_map[i]] = d_limit
+
+                # set d to a large number of probe vignettes IFU pickoff
+                for i in probe_vignette:
+                    d[subset_map[i]] = d_collided # just reuse value
+
+                # In the event of a collision, the merit is also
+                # assigned a poor value. For the two probes involved in the collision,
+                # the lower merit (higher value) probe is parked.
+                for c in probe_collisions:
+                    # Check if the first probe is in the reconfig subset
+                    if c[0] in probe_subset:
+                        # Check if the other probe is in the reconfig subset
+                        if c[1] in probe_subset:
+                            # Set the one with the larger d to a large number
+                            if d[subset_map[c[0]]] > d[subset_map[c[1]]]:
+                                d[subset_map[c[0]]] = d_collided
+                            else:
+                                d[subset_map[c[1]]] = d_collided
+                        else:
+                            # It isn't, so first probe large number
+                            d[subset_map[c[0]]] = d_collided 
+                    else:
+                        # It isn't so check if the second probe to be reconfiged
+                        if c[1] in probe_subset:
+                            # second probe large number
+                            d[subset_map[c[1]]] = d_collided
+                
+
+                # Merit is the sum of d (i.e., a bigger number is worse)
+                merit = np.sum(d)
 
                 configs.append({
                     'stars':test_stars,
@@ -1771,7 +1766,7 @@ class State(object):
             sim_index = i*self.frameskip + frame
 
             if self.star_vel:
-                if self.catalogfile:
+                if self.catalog_stars is not None:
                     # We're crab-walking through a catalog                
                     
                     # Move the visible stars. We do this first to ensure
