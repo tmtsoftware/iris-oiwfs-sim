@@ -24,10 +24,10 @@ import random
 platescale    = 2.182   # platescale in OIWFS plane (mm/arcsec)
 r_patrol      = 60*platescale # radius of the patrol area in (mm)
 r_overshoot   = 20      # distance by which probes overshoot centre (mm)
-r_max         = 332.12+r_overshoot # maximum extension of probes (mm)
-r_head        = 15.606/2.   # circumscribe rectangular head (mm)
+r_max         = 325+r_overshoot # maximum extension of probes (mm)
+r_head        = 7.      # circumscribe rectangular head (mm)
 r_min         = r_patrol    # minimum extension of probes (mm)
-r_star        = 11.5*platescale # minimum allowable separation between stars (mm)
+r_star        = r_head*2#11.5*platescale # minimum allowable separation between stars (mm)
 r0            = r_max-r_patrol # initial/parked probe extension (mm)
 maxstars      = 3           # maximum number of stars
 r_ifu         = 6.3*platescale # radius of region to avoid for IFU (mm)
@@ -90,6 +90,7 @@ u_col_max     = 0.5*alpha*(1/col_min - 1/tol_avoid)**alpha
 print "    Maximum probe extension:",r_max,"mm"
 print "                   Overshoot:",r_overshoot,"mm"
 print "           Probe head radius:",r_head,"mm"
+print "     Minimum star separation:",r_star,"mm"
 print "IFU Pickoff avoidance radius:",r_ifu,"mm"
 print "                Imager width:",width_imager,"mm"
 print "               Imager height:",height_imager,"mm"

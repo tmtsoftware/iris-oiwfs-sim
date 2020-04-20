@@ -20,7 +20,7 @@ FOV_area_arcminsq = np.pi*(1.)**2.
 density_perarcminsq = num_per_FOV/FOV_area_arcminsq
 
 # number of Monte Carlo simulations
-nmc = 1000
+nmc = 10000
 
 # Avoid the imager?
 avoidImager = True
