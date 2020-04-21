@@ -92,6 +92,9 @@ d_park_thresh = 100*r_patrol # since using floating points... roundoff error
 # max value of collision potential
 u_col_max     = 0.5*alpha*(1/col_min - 1/tol_avoid)**alpha
 
+# ifu footprint including allowance for probe head size
+r_ifu_probe = r_ifu+r_head
+
 # imager footprint including allowance for probe head size
 width_imager_probe = width_imager+r_head*2
 height_imager_probe = height_imager+r_head*2
@@ -679,7 +682,7 @@ class Probe(object):
         # The distance from the probe to the pickoff region needs
         # to account for the size of the prob head and the size of the
         # region
-        d = r - (r_head + r_ifu)
+        d = r - r_ifu_probe
         if d <= 0:
             raise ProbeVignetteIFU("Probe vignettes IFU! (%f,%f)" % \
                                     (self.x,self.y))
@@ -944,9 +947,12 @@ class State(object):
         self.fig.gca().add_artist(circle)
 
         # IFU pickoff
-        circle_ifu=plt.Circle((0,0),r_ifu,color='lightblue',fill=False)
+        circle_ifu=plt.Circle((0,0),r_ifu,color='blue',fill=False)
         self.fig.gca().add_artist(circle_ifu)
         
+        circle_ifu_probe=plt.Circle((0,0),r_ifu_probe,color='lightblue',fill=False)
+        self.fig.gca().add_artist(circle_ifu_probe)
+
         # Imager
         if self.avoidImager:
             # inner patch is imager footprint
