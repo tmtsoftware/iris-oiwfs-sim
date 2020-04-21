@@ -55,7 +55,8 @@ alpha         = 10.    # strength of collision avoidance potential
 beta          = 0.001  # strength of target attraction potential
 gamma         = 10.    # strength of IFU avoidance potential
 
-col_min       = 0.1    # closer to collision than this and we clip col potential
+col_min       = 0.1    # closer to collision than this and we clip potential
+vignette_min  = 0.2    # closer to vignetting than this and we clip potential
 vt_tol_deg    = 0.5    # what rotator velocity is stopped? (deg/s)
 vr_tol        = 1.25   # what extender velocity can be considered stopped? (mm/s)
 dt            = 0.05   # simulation time step size (s)
@@ -91,6 +92,11 @@ d_park_thresh = 100*r_patrol # since using floating points... roundoff error
 
 # max value of collision potential
 u_col_max     = 0.5*alpha*(1/col_min - 1/tol_avoid)**alpha
+
+# max vignette potential. We clip it based on vignette_min, which is a
+# bit further out, so that given a choice, avoiding vignetting loses to
+# the collision potential
+u_vignette_max = 0.5*alpha*(1/vignette_min - 1/tol_avoid)**alpha
 
 # ifu footprint including allowance for probe head size
 r_ifu_probe = r_ifu+r_head
@@ -687,10 +693,10 @@ class Probe(object):
             raise ProbeVignetteIFU("Probe vignettes IFU! (%f,%f)" % \
                                     (self.x,self.y))
         else:
-            # Use the same collision kind of potential function
-            if d < col_min:
-                # We're very close, clipped potential
-                u = u_col_max
+            # Use the same kind of potential function as for collisions
+            # but it clips at a lower value of the potential
+            if d < vignette_min:
+                u = u_vignette_max
             else:
                 if d < tol_avoid:
                     u = 0.5*gamma*(1/d - 1/tol_avoid)**2
