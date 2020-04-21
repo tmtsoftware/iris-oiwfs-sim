@@ -80,8 +80,12 @@ grad_tol      = 0.1*0.5*beta*vmax*dt # target potential gradient 1/2 step away
                                  
 d_clear       = 2.*r_origin*np.cos(np.radians(30)) # total probe lengths clear
 
-d_limit = 10*r_patrol    # distance for merit calc if probe is in limit for configuration
-d_collided = 20*r_patrol # distance for merit calc if probe collides in configuration
+# Following numbers should be close to each other, and much larger than
+# typical value of d (within patrol area) for the kludgey star assignment
+# algorithm.
+d_limit = 100*r_patrol+1    # distance for merit calc if probe is in limit for configuration
+d_collided = 100*r_patrol+2 # distance for merit calc if probe collides in configuration
+d_park_thresh = 100*r_patrol # since using floating points... roundoff error
 
 #print "Arrival tolerance (mm):",tol
 
@@ -100,6 +104,8 @@ print "     Minimum star separation:",r_star,"mm"
 print "IFU Pickoff avoidance radius:",r_ifu,"mm"
 print "                Imager width:",width_imager,"mm"
 print "               Imager height:",height_imager,"mm"
+print "   Imager Width + probe head:",width_imager_probe,"mm"
+print "  Imager Height + probe head:",height_imager_probe,"mm"
 print "      Max speed linear stage:",vr_max,"mm/s"
 print "      Max speed rotary stage:",vt_max,"rad/s"
 
@@ -1326,7 +1332,7 @@ class State(object):
             # because it would be in a limit, or collide with another probe
             for i in best:
                 p = self.probes[i] #[probe_subset[i]]
-                if (best_d[subset_map[i]] == d_limit) or (best_d[subset_map[i]] == d_collided):
+                if best_d[subset_map[i]] >= d_park_thresh:
                     # Park because limit or collided
                     p.park = True
                     if p.star is not None:
@@ -1388,6 +1394,14 @@ class State(object):
                 sTarg = p.star
 
             #print 'Select Probe',i,':',p.x,p.y,sTarg.x,sTarg.y,sTarg.catindex
+
+            # hack for debugging
+            #if (p.park is False) and (p.star is not None):
+            #    # Shouldn't be necessary but may catch an error
+            #    try:
+            #        p.set_cart(p.star.x,p.star.y)
+            #    except Exception:
+            #        print "Here?"
 
         return True
 
@@ -2542,7 +2556,7 @@ if __name__ == '__main__':
 
     # animated non-sidereal tracking scrolling through catalog, show on-screen
     if True:
-        s = run_sim(animate='cont',display=True,dwell=0,frameskip=50,
+        s = run_sim(animate='cont',display=True,dwell=0,frameskip=1,
                 avoidImager=True,
                 #plotlim=[-150,150,-150,150], star_vel=[-2,0],
                 end_pos=[0.99,0],
