@@ -106,17 +106,18 @@ width_imager_probe = width_imager+r_head*2
 height_imager_probe = height_imager+r_head*2
 
 
-print "    Maximum probe extension:",r_max,"mm"
-print "                   Overshoot:",r_overshoot,"mm"
-print "           Probe head radius:",r_head,"mm"
-print "     Minimum star separation:",r_star,"mm"
-print "IFU Pickoff avoidance radius:",r_ifu,"mm"
-print "                Imager width:",width_imager,"mm"
-print "               Imager height:",height_imager,"mm"
-print "   Imager Width + probe head:",width_imager_probe,"mm"
-print "  Imager Height + probe head:",height_imager_probe,"mm"
-print "      Max speed linear stage:",vr_max,"mm/s"
-print "      Max speed rotary stage:",vt_max,"rad/s"
+print "       Maximum probe extension:",r_max,"mm"
+print "                      Overshoot:",r_overshoot,"mm"
+print "              Probe head radius:",r_head,"mm"
+print "        Minimum star separation:",r_star,"mm"
+print "             IFU Pickoff radius:",r_ifu,"mm"
+print "IFU Pickoff radius + probe head:",r_ifu_probe,"mm"
+print "                   Imager width:",width_imager,"mm"
+print "                  Imager height:",height_imager,"mm"
+print "      Imager Width + probe head:",width_imager_probe,"mm"
+print "     Imager Height + probe head:",height_imager_probe,"mm"
+print "         Max speed linear stage:",vr_max,"mm/s"
+print "         Max speed rotary stage:",vt_max,"rad/s"
 
 #sys.exit(1)
 

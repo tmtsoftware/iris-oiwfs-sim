@@ -26,7 +26,7 @@ density_perarcminsq = num_per_FOV/FOV_area_arcminsq
 nmc = 10000
 
 # Avoid the imager?
-avoidImager = True
+avoidImager = False
 
 # --------------------------------------------------------------------------
 # Start simulation
@@ -39,8 +39,8 @@ print "Are we avoiding the imager  :",avoidImager
 # Outer loop over MC simulations
 results = []
 for i in range(nmc):
-    #if i % 100 == 0:
-    print "%i / %i" % (i,nmc)
+    if i % 100 == 0:
+        print "%i / %i" % (i,nmc)
 
     # Ensure that no probe is assigned to a star from previous iteration,
     # and is initially assumed to be parked.
@@ -69,12 +69,14 @@ for i in range(nmc):
             except Exception:
                 print "Shouldn't be here %i" % i
     
+    # Count how many of the probes were successfully assigned to stars
+    # and append to the array of results
     nassigned = np.sum([p.park == False for p in s.probes])
     #print n, nassigned
     results.append([n,nassigned])
 
+# Display the results
 results = np.array(results)
-
 print "Done:"
 for i in range(4):
     num = np.sum(results[:,1]==i)
