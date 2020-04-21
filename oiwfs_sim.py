@@ -14,6 +14,7 @@ import itertools
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib.colors as colors
+import matplotlib.patches as patches
 import numpy as np
 import sys
 import time
@@ -86,6 +87,11 @@ d_collided = 20*r_patrol # distance for merit calc if probe collides in configur
 
 # max value of collision potential
 u_col_max     = 0.5*alpha*(1/col_min - 1/tol_avoid)**alpha
+
+# imager footprint including allowance for probe head size
+width_imager_probe = width_imager+r_head*2
+height_imager_probe = height_imager+r_head*2
+
 
 print "    Maximum probe extension:",r_max,"mm"
 print "                   Overshoot:",r_overshoot,"mm"
@@ -547,7 +553,7 @@ class Probe(object):
             raise ProbeLimits(errstr)
 
     def check_imagerVignette(self):
-        if (abs(self.x) < width_imager/2) and (abs(self.y) < height_imager/2):
+        if (abs(self.x) < width_imager_probe/2) and (abs(self.y) < height_imager_probe/2):
             raise ProbeVignetteImager
 
     def move(self):
@@ -756,6 +762,7 @@ class State(object):
                  vectors=None,
                  end_pos=None,
                  star_vel=None,
+                 avoidImager=False,
                  wcs=None):
 
         if probes is None:
@@ -788,6 +795,7 @@ class State(object):
         self.title_str=title_str
         self.probe_cols=probe_cols
         self.plotlim=plotlim
+        self.avoidImager=avoidImager
         self.plot_init()
         self.asterism_counter=0
 
@@ -930,8 +938,19 @@ class State(object):
         self.fig.gca().add_artist(circle)
 
         # IFU pickoff
-        circle_ifu=plt.Circle((0,0),r_ifu,color='gray',fill=False)
+        circle_ifu=plt.Circle((0,0),r_ifu,color='lightblue',fill=False)
         self.fig.gca().add_artist(circle_ifu)
+        
+        # Imager
+        if self.avoidImager:
+            # inner patch is imager footprint
+            imager_patch = patches.Rectangle((-width_imager/2,-height_imager/2),width_imager,height_imager,edgecolor='orange',facecolor='none')
+            self.fig.gca().add_patch(imager_patch)
+
+            # outer patch includes allowance for probe radius
+            imager_patch = patches.Rectangle((-width_imager_probe/2,-height_imager_probe/2),width_imager_probe,height_imager_probe,edgecolor='yellow',facecolor='none')
+            self.fig.gca().add_patch(imager_patch)
+
 
         # arcs showing patrol regions for each probe
         theta_region = np.linspace(-theta_max,theta_max,num=50,endpoint=True)
@@ -1030,7 +1049,7 @@ class State(object):
                             star.x, star.y = pos
 
 
-    def select_probes(self,probe_subset=None,star_vel=None,catalog_subset=None,avoidImager=True):
+    def select_probes(self,probe_subset=None,star_vel=None,catalog_subset=None):
         # Select a probe for each star:
         #  - test all probe / star permuations
         #  - reject invalid configurations
@@ -1038,7 +1057,6 @@ class State(object):
         #  - optionally only reconfigure a subset of the probes
         #  - if star_vel provided, weight configs coming from that direction
         #  - if catalog_subset provided, find best matches from catalog (> 3 stars)
-        #  - if avoidImager set, don't allow stars that vignette the imager
         #
         # It is up to the caller to ensure that catalog_subset only contains
         # stars not currently being tracked (i.e., ensure consistency with
@@ -1156,7 +1174,7 @@ class State(object):
                         if s.x is not None:
                             if (probe_index[i]==1) and (s.catindex==64):
                                 pass
-                            p.set_cart(s.x,s.y,avoidImager=avoidImager)
+                            p.set_cart(s.x,s.y,avoidImager=self.avoidImager)
                             p.u_ifu()
                             p.star = s
                         else:
@@ -1848,13 +1866,15 @@ class State(object):
                                 old_y = p.y
 
                                 try:
-                                    p.set_cart(p.star.x,p.star.y)
+                                    p.set_cart(p.star.x,p.star.y,avoidImager=self.avoidImager)
                                     p.u_ifu()
                                 except ProbeLimits:
                                     reconfig = True
                                 except ProbeCollision:
                                     reconfig = True
                                 except ProbeVignetteIFU:
+                                    reconfig = True
+                                except ProbeVignetteImager:
                                     reconfig = True
                                 
                                 # revert position after test
@@ -2258,7 +2278,8 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             fps=None,                   # fps for animation
             bitrate=3000,               # bitrate if animation to file
             end_pos=None,               # Where simulation stops if star_vel
-            star_vel=None               # move stars across focal plane
+            star_vel=None,              # move stars across focal plane
+            avoidImager=False           # if set avoid Vignetting imager
 ):
 
     # Set the initial OIWFS state and plot
@@ -2297,7 +2318,8 @@ def run_sim(animate='cont',             # one of 'cont','track',None
               levels=levels,
               vectors=vectors,
               end_pos=end_pos,
-              star_vel=star_vel)
+              star_vel=star_vel,
+              avoidImager=avoidImager)
 
     if animate == 'cont':
         # continuous animation
@@ -2520,10 +2542,11 @@ if __name__ == '__main__':
 
     # animated non-sidereal tracking scrolling through catalog, show on-screen
     if True:
-        s = run_sim(animate='cont',display=True,dwell=0,frameskip=1,
+        s = run_sim(animate='cont',display=True,dwell=0,frameskip=50,
+                avoidImager=True,
                 #plotlim=[-150,150,-150,150], star_vel=[-2,0],
-                #end_pos=[0.1,0],
-                end_pos=[0.05,0],
+                end_pos=[0.99,0],
+                #end_pos=[0.05,0],
                 #end_pos=[0.33,0],
                 star_vel=[-1.0*platescale,0], # platescale in mm/arcsec
                 plotlim=[-150,150,-150,150], #star_vel=[-2,0],#star_vel=[-0.1*platescale,0],#[-2,0],
