@@ -106,7 +106,7 @@ width_imager_probe = width_imager+r_head*2
 height_imager_probe = height_imager+r_head*2
 
 
-print "       Maximum probe extension:",r_max,"mm"
+print "        Maximum probe extension:",r_max,"mm"
 print "                      Overshoot:",r_overshoot,"mm"
 print "              Probe head radius:",r_head,"mm"
 print "        Minimum star separation:",r_star,"mm"
@@ -279,6 +279,10 @@ class ProbeVignetteIFU(Exception):
 
 # Exception class for probe vignetting Imager
 class ProbeVignetteImager(Exception):
+    pass
+
+# Exception class for probe outside of patrol area
+class ProbePatrolArea(Exception):
     pass
 
 # Calculate acceleration along axis to reach target
@@ -835,7 +839,7 @@ class State(object):
         self.star_vel=star_vel
         self.end_pos=end_pos
 
-        if catalog_xdeg is not None and self.catalog_ydeg is not None:
+        if catalog_xdeg is not None and catalog_ydeg is not None:
             self.catalog_xdeg = catalog_xdeg
             self.catalog_ydeg = catalog_ydeg
         else:
@@ -1194,6 +1198,11 @@ class State(object):
                             if (probe_index[i]==1) and (s.catindex==64):
                                 pass
                             p.set_cart(s.x,s.y,avoidImager=self.avoidImager)
+                            if np.sqrt(p.x**2 + p.y**2) > r_patrol:
+                                # No point in automatically assigning
+                                # a probe to a star that falls outside
+                                # of the patrol area
+                                raise ProbePatrolArea
                             p.u_ifu()
                             p.star = s
                         else:
@@ -1209,6 +1218,9 @@ class State(object):
                         probe_vignette.append(probe_index[i])
                     except ProbeVignetteImager:
                         probe_vignette.append(probe_index[i])
+                    except ProbePatrolArea:
+                        # Treat this like a probe actuator limit case
+                        probe_limits.append(probe_index[i])
 
                 # Check for probe collisions (using minimum star distance as
                 # threshold) in this configuration. Note that we check all
@@ -2331,6 +2343,8 @@ def run_sim(animate='cont',             # one of 'cont','track',None
               use_vel_servo=use_vel_servo,
               tran_scale=tran_scale,
               aster_start=aster_start,
+              catalog_xdeg=catalog_xdeg,
+              catalog_ydeg=catalog_ydeg,
               catalogfile=catalogfile,
               catalog_start=catalog_start,
               probe_cols=probe_cols,
