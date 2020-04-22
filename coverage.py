@@ -32,6 +32,9 @@ nmc = 1000
 # Avoid the imager?
 avoidImager = True
 
+# Plot simulation to screen? (have to close between each sim)
+doPlot = False
+
 # --------------------------------------------------------------------------
 # Start simulation
 # --------------------------------------------------------------------------
@@ -90,6 +93,11 @@ for i in range(nmc):
     nassigned = np.sum([p.park == False for p in s.probes])
     #print n, nassigned
     results.append([n,nassigned])
+
+    # Create a figure on the screen
+    if doPlot:
+        oiwfs_sim.run_sim(animate=None,catalog_xdeg=x_deg,catalog_ydeg=y_deg, \
+            avoidImager=avoidImager, plotlim=[-150,150,-150,150], display=True)
 
 # Display the results
 results = np.array(results)

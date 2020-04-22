@@ -1031,6 +1031,22 @@ class State(object):
         self.graphics_objects.append(self.time_text)
         self.graphics_objects.append(self.pos_text)
 
+    def update_field_stars(self):
+        if self.catalog_stars is not None:
+            if self.fieldstars_object:
+                self.fieldstars_object.remove()
+
+            if self.catalog_unassigned.any():
+                # Get coord of visible field stars relative to current OIWFS pointing
+                field_x = np.array([s.x for s in self.catalog_stars[self.catalog_unassigned]])
+                field_y = np.array([s.y for s in self.catalog_stars[self.catalog_unassigned]])
+                field_x = field_x - self.oiwfs_x0
+                field_y = field_y - self.oiwfs_y0
+
+                self.fieldstars_object, = self.ax.plot(field_x, field_y, '*', color='orange', markersize=5,zorder=50)
+                 
+
+
     def random_stars(self):
         """ Generate new random star positions """
 
@@ -2031,16 +2047,8 @@ class State(object):
                     s.update_symbol()
 
             # Field stars (only draw last time through frameskip loop)
-            if (frame == (self.frameskip-1)) and self.catalog_unassigned.any():
-                 # Get coord of visible field stars relative to current OIWFS pointing
-                 field_x = np.array([s.x for s in self.catalog_stars[self.catalog_unassigned]])
-                 field_y = np.array([s.y for s in self.catalog_stars[self.catalog_unassigned]])
-                 field_x = field_x - self.oiwfs_x0
-                 field_y = field_y - self.oiwfs_y0
-
-                 if self.fieldstars_object:
-                     self.fieldstars_object.remove()
-                 self.fieldstars_object, = self.ax.plot(field_x, field_y, '*', color='orange', markersize=5,zorder=50)
+            if (frame == (self.frameskip-1)):
+                 self.update_field_stars()
                  objects.append(self.fieldstars_object)
 
             # Move the probes
@@ -2422,17 +2430,26 @@ def run_sim(animate='cont',             # one of 'cont','track',None
             i = i + 1
 
     else:
-        # Display a single staged-configuration
+        if aster:
+            # Display a single staged-configuration
+            for j in range(3):
+                p = s.probes[j]
+                p.star = s.stars[j]
+                star1 = aster[s.i_aster][j]    # current position
+                p.set_cart(star1[0],star1[1])
 
-        for j in range(3):
-            p = s.probes[j]
-            p.star = s.stars[j]
-            star1 = aster[s.i_aster][j]    # current position
-            p.set_cart(star1[0],star1[1])
-
-            n = (s.i_aster+1) % len(aster)
-            star2 = aster[n][j]  # where we're headed
-            p.star.x,p.star.y=star2
+                n = (s.i_aster+1) % len(aster)
+                star2 = aster[n][j]  # where we're headed
+                p.star.x,p.star.y=star2
+        elif s.catalog_stars is not None:
+            # Auto-assign to externally supplied catalog
+            s.select_probes(catalog_subset=range(len(s.catalog_stars)))
+            for p in s.probes:
+                if (p.park is False) and (p.star is not None):
+                    p.set_cart(p.star.x,p.star.y)
+        
+            s.catalog_unassigned = np.where(s.catalog_assigned == False)[0]
+            s.update_field_stars()
 
         if startpos is not None:
             for i_str in startpos:
