@@ -22,11 +22,15 @@ num_per_FOV = 3.5
 FOV_area_arcminsq = np.pi*(1.)**2.
 density_perarcminsq = num_per_FOV/FOV_area_arcminsq
 
+print "**************************************************"
+print "Catalog surface density: ",density_perarcminsq," /arcmin^2"
+print "**************************************************"
+
 # number of Monte Carlo simulations
-nmc = 10000
+nmc = 1000
 
 # Avoid the imager?
-avoidImager = False
+avoidImager = True
 
 # --------------------------------------------------------------------------
 # Start simulation
@@ -37,6 +41,7 @@ s = oiwfs_sim.State(None,avoidImager=avoidImager)
 print "Are we avoiding the imager  :",avoidImager
 
 # Outer loop over MC simulations
+print "Begin simulations..."
 results = []
 for i in range(nmc):
     if i % 100 == 0:
@@ -55,17 +60,28 @@ for i in range(nmc):
     x_deg = np.random.uniform(low=-1.0/60.,high=1.0/60.,size=n)
     y_deg = np.random.uniform(low=-1.0/60.,high=1.0/60.,size=n)
 
+    # only keep stars that land within patrol FOV. Not strictly
+    # required since select_probes() will also skip the ones
+    # that land outside. However, this speeds things up because it
+    # cuts down on the number of configurations that need to be
+    # tested.
+    r_mm = np.sqrt(x_deg**2+y_deg**2)*3600.*oiwfs_sim.platescale
+    keep = (r_mm <= oiwfs_sim.r_patrol)
+    x_deg=x_deg[keep]
+    y_deg=y_deg[keep]
+    n = len(x_deg)
+
+    # Pass the catalog to the state object
     s.init_catalog(x_deg,y_deg)
 
-    # try assigning probes to stars
-    #if i == 1775:
-    #    print "foo"
+    # Automatically assign probes to stars
     s.select_probes(catalog_subset=range(len(s.catalog_stars)))
     for p in s.probes:
         if (p.park is False) and (p.star is not None):
+
             # Shouldn't be necessary but may catch an error
             try:
-                p.set_cart(p.star.x,p.star.y)
+                p.set_cart(p.star.x,p.star.y,avoidImager=avoidImager)
             except Exception:
                 print "Shouldn't be here %i" % i
     
@@ -80,6 +96,8 @@ results = np.array(results)
 print "Done:"
 for i in range(4):
     num = np.sum(results[:,1]==i)
+    err = np.sqrt(num)
     percent = 100.*num/float(nmc)
-    print "%i stars %i/%i = %.1f %%" % (i,num,nmc,percent)
+    percent_err = 100.*err/float(nmc)
+    print "%i stars %i/%i = %.1f +/- %.1f %%" % (i,num,nmc,percent,percent_err)
 
